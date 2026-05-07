@@ -117,7 +117,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             // hidden child pane.
             let resolved_env_vars: HashMap<OsString, OsString> = HashMap::new();
             third_party_harness
-                .prepare_environment_config(&working_dir, None, &resolved_env_vars)
+                .prepare_environment_config(&working_dir, None, &resolved_env_vars, None)
                 .map_err(|error: AgentDriverError| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
                 if let Err(error) = manager.install().await {

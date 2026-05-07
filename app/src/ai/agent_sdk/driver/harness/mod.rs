@@ -147,6 +147,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         _working_dir: &Path,
         _system_prompt: Option<&str>,
         _resolved_env_vars: &HashMap<OsString, OsString>,
+        _openai_base_url_override: Option<&str>,
     ) -> Result<(), AgentDriverError> {
         Ok(())
     }

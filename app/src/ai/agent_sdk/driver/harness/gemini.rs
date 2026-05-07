@@ -54,6 +54,7 @@ impl ThirdPartyHarness for GeminiHarness {
         working_dir: &Path,
         system_prompt: Option<&str>,
         _resolved_env_vars: &HashMap<OsString, OsString>,
+        _openai_base_url_override: Option<&str>,
     ) -> Result<(), AgentDriverError> {
         prepare_gemini_environment_config(working_dir, system_prompt).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {

@@ -59,13 +59,18 @@ impl ThirdPartyHarness for CodexHarness {
         working_dir: &Path,
         system_prompt: Option<&str>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        openai_base_url_override: Option<&str>,
     ) -> Result<(), AgentDriverError> {
-        prepare_codex_environment_config(working_dir, system_prompt, resolved_env_vars).map_err(
-            |error| AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            },
+        prepare_codex_environment_config(
+            working_dir,
+            system_prompt,
+            resolved_env_vars,
+            openai_base_url_override,
         )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
+        })
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
@@ -440,6 +445,7 @@ fn prepare_codex_environment_config(
     working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
+    openai_base_url_override: Option<&str>,
 ) -> Result<()> {
     let home_dir =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
@@ -454,7 +460,11 @@ fn prepare_codex_environment_config(
         None => log::info!("No OPENAI_API_KEY available; skipping Codex auth.json seed"),
     }
 
-    prepare_codex_config_toml(&codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME), working_dir)?;
+    prepare_codex_config_toml(
+        &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
+        working_dir,
+        openai_base_url_override,
+    )?;
     Ok(())
 }
 
@@ -560,9 +570,13 @@ fn resolve_openai_api_key(resolved_env_vars: &HashMap<OsString, OsString>) -> Op
 /// while preserving anything that might already exist there. We handle:
 /// - project trust: for a working dir and all of its git repo subdirectories,
 ///   set the projects to `trusted`.
-/// - base URL: set `openai_base_url = "<US data-residency endpoint>"` so we
-///   hit the regional host our API keys require.
-fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Result<()> {
+/// - base URL: set `openai_base_url` to an override when provided, otherwise
+///   to the regional host our API keys require.
+fn prepare_codex_config_toml(
+    config_toml_path: &Path,
+    working_dir: &Path,
+    openai_base_url_override: Option<&str>,
+) -> Result<()> {
     let existing = match fs::read_to_string(config_toml_path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -580,7 +594,10 @@ fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Res
         )
     })?;
 
-    set_codex_openai_base_url(&mut doc, CODEX_OPENAI_BASE_URL);
+    set_codex_openai_base_url(
+        &mut doc,
+        openai_base_url_override.unwrap_or(CODEX_OPENAI_BASE_URL),
+    );
 
     let canonical = working_dir.canonicalize().with_context(|| {
         format!(

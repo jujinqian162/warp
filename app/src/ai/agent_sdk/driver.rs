@@ -72,7 +72,7 @@ use crate::{
     },
     terminal::view::ConversationRestorationInNewPaneType,
 };
-use ai::skills::ParsedSkill;
+use ai::{api_keys::ApiKeyManager, skills::ParsedSkill};
 use anyhow::{anyhow, Context as _};
 use futures::{
     channel::oneshot,
@@ -261,6 +261,10 @@ pub struct AgentDriver {
     /// `prepare_environment_config` so harnesses can look up resolved secret
     /// values without re-deriving precedence.
     resolved_env_vars: Arc<HashMap<OsString, OsString>>,
+
+    /// Locally persisted OpenAI-compatible base URL override for harnesses that
+    /// support it without routing through terminal environment variables.
+    openai_base_url_override: Option<String>,
 
     output_format: OutputFormat,
 
@@ -561,6 +565,9 @@ impl AgentDriver {
         }
 
         let resolved_env_vars = Arc::new(env_vars);
+        let openai_base_url_override = ApiKeyManager::as_ref(ctx)
+            .openai_base_url()
+            .map(ToOwned::to_owned);
 
         let terminal_driver = terminal::TerminalDriver::create(
             terminal::TerminalDriverOptions {
@@ -609,6 +616,7 @@ impl AgentDriver {
             working_dir,
             secrets: Arc::new(secrets),
             resolved_env_vars,
+            openai_base_url_override,
             output_format: OutputFormat::default(),
             task_id,
             harness: None,
@@ -1529,10 +1537,15 @@ impl AgentDriver {
             .spawn(|me, _| Arc::clone(&me.resolved_env_vars))
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+        let openai_base_url_override = foreground
+            .spawn(|me, _| me.openai_base_url_override.clone())
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         harness.prepare_environment_config(
             &working_dir,
             system_prompt.as_deref(),
             &resolved_env_vars,
+            openai_base_url_override.as_deref(),
         )?;
         let resume = foreground
             .spawn(|me, _| me.resume_payload.take())

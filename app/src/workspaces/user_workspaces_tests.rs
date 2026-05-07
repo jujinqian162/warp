@@ -18,8 +18,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    Workspace,
+    AdminEnablementSetting, ByoApiKeyPolicy, CodebaseContextSettings, HostEnablementSetting,
+    LlmHostSettings, Workspace,
 };
 
 use mockall::Sequence;
@@ -208,6 +208,50 @@ fn test_codebase_context_enabled_with_no_workspace() {
             assert!(
                 codebase_context_enabled,
                 "codebase context should be on by default"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_byo_api_key_enabled_with_no_workspace() {
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources { workspaces: vec![] },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(),
+                "BYOK should be available even when there is no active workspace"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_byo_api_key_enabled_even_when_workspace_policy_is_disabled() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.tier.byo_api_key_policy = Some(ByoApiKeyPolicy { enabled: false });
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(),
+                "BYOK should not be disabled by a billing-tier policy"
             );
         });
     })

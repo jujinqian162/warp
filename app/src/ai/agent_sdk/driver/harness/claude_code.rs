@@ -75,6 +75,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         working_dir: &Path,
         _system_prompt: Option<&str>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        _openai_base_url_override: Option<&str>,
     ) -> Result<(), AgentDriverError> {
         prepare_claude_environment_config(working_dir, resolved_env_vars).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {

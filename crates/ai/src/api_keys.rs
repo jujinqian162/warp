@@ -22,6 +22,7 @@ pub struct ApiKeys {
     pub anthropic: Option<String>,
     pub openai: Option<String>,
     pub open_router: Option<String>,
+    pub openai_base_url: Option<String>,
 }
 
 impl ApiKeys {
@@ -91,6 +92,16 @@ impl ApiKeyManager {
         self.keys.open_router = key;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_base_url(&mut self, base_url: Option<String>, ctx: &mut ModelContext<Self>) {
+        self.keys.openai_base_url = normalize_optional_string(base_url);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn openai_base_url(&self) -> Option<&str> {
+        self.keys.openai_base_url.as_deref()
     }
 
     pub fn set_aws_credentials_state(
@@ -217,3 +228,49 @@ impl Entity for ApiKeyManager {
 }
 
 impl SingletonEntity for ApiKeyManager {}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_keys_storage_payload_round_trips_openai_base_url() {
+        let keys: ApiKeys =
+            serde_json::from_str(r#"{"openai_base_url":"https://proxy.example.com/v1"}"#).unwrap();
+        let stored = serde_json::to_value(keys).unwrap();
+
+        assert_eq!(
+            stored
+                .get("openai_base_url")
+                .and_then(|value| value.as_str()),
+            Some("https://proxy.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn openai_base_url_does_not_count_as_api_key() {
+        let keys = ApiKeys {
+            openai_base_url: Some("https://proxy.example.com/v1".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!keys.has_any_key());
+    }
+
+    #[test]
+    fn normalize_optional_string_trims_and_clears_empty_values() {
+        assert_eq!(
+            normalize_optional_string(Some("  https://proxy.example.com/v1  ".to_string())),
+            Some("https://proxy.example.com/v1".to_string())
+        );
+        assert_eq!(normalize_optional_string(Some("   ".to_string())), None);
+        assert_eq!(normalize_optional_string(None), None);
+    }
+}

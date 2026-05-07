@@ -3254,7 +3254,7 @@ impl SettingsWidget for GlobalAIWidget {
 
     fn search_terms(&self) -> &str {
         "oz warp agent global ai a.i. active next command prompt code diffs suggestion suggested suggestions \
-                agent mode natural language detection input hint api keys bring your own byo google anthropic openai"
+                agent mode natural language detection input hint api keys bring your own byo google anthropic openai openrouter base url baseurl"
     }
 
     fn render(
@@ -6308,8 +6308,10 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
+    openai_base_url_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
+    open_router_api_key_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6324,19 +6326,21 @@ impl ApiKeysWidget {
 
         let ApiKeys {
             openai: openai_key,
+            openai_base_url,
             anthropic: anthropic_key,
             google: google_key,
+            open_router: open_router_key,
             ..
         } = ApiKeyManager::as_ref(ctx).keys().clone();
 
-        // A helper macro to create and configure an API key editor.  This avoids a lot
+        // A helper macro to create and configure an API setting editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
-        macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
+        macro_rules! create_api_setting_editor {
+            ($editor:ident, $value:ident, $set_func:ident, $placeholder:literal, $is_password:expr) => {
                 let $editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
-                        is_password: true,
+                        is_password: $is_password,
                         text: TextOptions {
                             font_size_override: Some(appearance.ui_font_size()),
                             font_family_override: Some(appearance.monospace_font_family()),
@@ -6351,8 +6355,8 @@ impl ApiKeysWidget {
                     };
                     let mut editor = EditorView::single_line(options, ctx);
                     editor.set_placeholder_text($placeholder, ctx);
-                    if let Some(key) = &$key {
-                        editor.set_buffer_text(key, ctx);
+                    if let Some(value) = &$value {
+                        editor.set_buffer_text(value, ctx);
                     }
                     editor
                 });
@@ -6364,9 +6368,9 @@ impl ApiKeysWidget {
                 ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
                     if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                         let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
-                        let key = buffer_text.is_empty().not().then_some(buffer_text);
+                        let value = buffer_text.is_empty().not().then_some(buffer_text);
                         ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                            model.$set_func(key, ctx);
+                            model.$set_func(value, ctx);
                         });
                     }
                 });
@@ -6377,10 +6381,10 @@ impl ApiKeysWidget {
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled();
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
-                        let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
+                        let has_value = !editor_clone.as_ref(ctx).is_empty(ctx);
 
-                        // If BYO is disabled, clear the API key from the editor and storage
-                        if !is_byo_enabled && has_key {
+                        // If BYO is disabled, clear the stored value from the editor and storage.
+                        if !is_byo_enabled && has_value {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
                             });
@@ -6400,24 +6404,48 @@ impl ApiKeysWidget {
             };
         }
 
-        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
-        create_api_key_editor!(
+        create_api_setting_editor!(
+            openai_api_key_editor,
+            openai_key,
+            set_openai_key,
+            "sk-...",
+            true
+        );
+        create_api_setting_editor!(
+            openai_base_url_editor,
+            openai_base_url,
+            set_openai_base_url,
+            "https://api.openai.com/v1",
+            false
+        );
+        create_api_setting_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
-            "sk-ant-..."
+            "sk-ant-...",
+            true
         );
-        create_api_key_editor!(
+        create_api_setting_editor!(
             google_api_key_editor,
             google_key,
             set_google_key,
-            "AIzaSy..."
+            "AIzaSy...",
+            true
+        );
+        create_api_setting_editor!(
+            open_router_api_key_editor,
+            open_router_key,
+            set_open_router_key,
+            "sk-or-...",
+            true
         );
 
         Self {
             openai_api_key_editor,
+            openai_base_url_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+            open_router_api_key_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6495,6 +6523,13 @@ impl ApiKeysWidget {
         ));
         column.add_child(render_api_key_input(
             appearance,
+            "OpenAI Base URL",
+            self.openai_base_url_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
             "Anthropic API Key",
             self.anthropic_api_key_editor.clone(),
             is_enabled,
@@ -6504,6 +6539,13 @@ impl ApiKeysWidget {
             appearance,
             "Google API Key",
             self.google_api_key_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenRouter API Key",
+            self.open_router_api_key_editor.clone(),
             is_enabled,
             app,
         ));
@@ -6603,7 +6645,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt"
+        "api keys bring your own byo openai anthropic google claude gemini gpt openrouter base url baseurl"
     }
 
     fn render(

@@ -172,13 +172,91 @@ fn read_codex_config(path: &std::path::Path) -> toml::Table {
 }
 
 #[test]
+fn prepare_codex_config_toml_uses_openai_base_url_override() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join(".codex/config.toml");
+    let working_dir = tmp.path().join("workspace/proj");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        Some("https://proxy.example.com/v1"),
+    )
+    .unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    assert_eq!(
+        cfg["openai_base_url"].as_str(),
+        Some("https://proxy.example.com/v1")
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_codex_environment_config_ignores_openai_base_url_env_var() {
+    let tmp = TempDir::new().unwrap();
+    let working_dir = tmp.path().join("workspace/proj");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    let prev_home = std::env::var("HOME").ok();
+    let prev_base_url = std::env::var("OPENAI_BASE_URL").ok();
+    std::env::set_var("HOME", tmp.path());
+    std::env::set_var("OPENAI_BASE_URL", "https://env.example.com/v1");
+
+    prepare_codex_environment_config(&working_dir, None, &HashMap::new(), None).unwrap();
+
+    match prev_home {
+        Some(value) => std::env::set_var("HOME", value),
+        None => std::env::remove_var("HOME"),
+    }
+    match prev_base_url {
+        Some(value) => std::env::set_var("OPENAI_BASE_URL", value),
+        None => std::env::remove_var("OPENAI_BASE_URL"),
+    }
+
+    let cfg = read_codex_config(&tmp.path().join(".codex/config.toml"));
+    assert_eq!(cfg["openai_base_url"].as_str(), Some(CODEX_OPENAI_BASE_URL));
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_codex_environment_config_uses_openai_base_url_setting() {
+    let tmp = TempDir::new().unwrap();
+    let working_dir = tmp.path().join("workspace/proj");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    let prev_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", tmp.path());
+
+    prepare_codex_environment_config(
+        &working_dir,
+        None,
+        &HashMap::new(),
+        Some("https://setting.example.com/v1"),
+    )
+    .unwrap();
+
+    match prev_home {
+        Some(value) => std::env::set_var("HOME", value),
+        None => std::env::remove_var("HOME"),
+    }
+
+    let cfg = read_codex_config(&tmp.path().join(".codex/config.toml"));
+    assert_eq!(
+        cfg["openai_base_url"].as_str(),
+        Some("https://setting.example.com/v1")
+    );
+}
+
+#[test]
 fn prepare_codex_config_toml_writes_fresh_config() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join(".codex/config.toml");
     let working_dir = tmp.path().join("workspace/proj");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -202,7 +280,7 @@ fn prepare_codex_config_toml_preserves_unrelated_keys() {
     )
     .unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -225,9 +303,9 @@ fn prepare_codex_config_toml_is_idempotent() {
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
     let after_first = fs::read_to_string(&config_path).unwrap();
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
     let after_second = fs::read_to_string(&config_path).unwrap();
 
     assert_eq!(after_first, after_second);
@@ -256,7 +334,7 @@ fn prepare_codex_config_toml_upgrades_untrusted_entry() {
     )
     .unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert_eq!(
@@ -275,7 +353,7 @@ fn prepare_codex_config_toml_trusts_multiple_child_repos() {
     fs::create_dir_all(repo_a.join(".git")).unwrap();
     fs::create_dir_all(repo_b.join(".git")).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     let projects = cfg["projects"].as_table().unwrap();
@@ -303,7 +381,7 @@ fn prepare_codex_config_toml_overwrites_stale_openai_base_url() {
     )
     .unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir).unwrap();
+    prepare_codex_config_toml(&config_path, &working_dir, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert_eq!(cfg["openai_base_url"].as_str(), Some(CODEX_OPENAI_BASE_URL));
