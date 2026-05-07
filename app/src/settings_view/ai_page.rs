@@ -2218,6 +2218,7 @@ pub enum AISettingsPageAction {
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
     ToggleCanUseWarpCreditsWithByok,
+    ToggleLocalOpenAITextBackend,
     HyperlinkClick(HyperlinkUrl),
     ToggleCodebaseContext,
     ToggleShowInputHintText,
@@ -2615,6 +2616,13 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .can_use_warp_credits_with_byok
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleLocalOpenAITextBackend => {
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    let enabled = !manager.is_local_openai_text_backend_enabled();
+                    manager.set_local_openai_text_backend_enabled(enabled, ctx);
                 });
                 ctx.notify();
             }
@@ -6309,9 +6317,11 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     openai_base_url_editor: ViewHandle<EditorView>,
+    openai_model_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
     open_router_api_key_editor: ViewHandle<EditorView>,
+    local_openai_text_backend_switch: SwitchStateHandle,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6327,6 +6337,7 @@ impl ApiKeysWidget {
         let ApiKeys {
             openai: openai_key,
             openai_base_url,
+            openai_model,
             anthropic: anthropic_key,
             google: google_key,
             open_router: open_router_key,
@@ -6419,6 +6430,13 @@ impl ApiKeysWidget {
             false
         );
         create_api_setting_editor!(
+            openai_model_editor,
+            openai_model,
+            set_openai_model,
+            "gpt-4o-mini",
+            false
+        );
+        create_api_setting_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
@@ -6443,9 +6461,11 @@ impl ApiKeysWidget {
         Self {
             openai_api_key_editor,
             openai_base_url_editor,
+            openai_model_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
             open_router_api_key_editor,
+            local_openai_text_backend_switch: Default::default(),
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6461,13 +6481,15 @@ impl ApiKeysWidget {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
         let is_enabled = is_any_ai_enabled && is_byo_enabled;
+        let local_backend_enabled =
+            ApiKeyManager::as_ref(app).is_local_openai_text_backend_enabled();
 
         let mut column = Flex::column()
             .with_spacing(16.)
             .with_child(
                 Container::new(
                     render_ai_setting_description(
-                        "Use your own API keys from model providers for the Warp Agent to use. API keys are stored locally and never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits.",
+                        "Use your own API keys from model providers. OpenAI API Key, OpenAI Base URL, and OpenAI Model are also used by the local OpenAI-compatible text backend when it is enabled. Provider keys are stored locally and never synced to the cloud.",
                         is_enabled,
                         app,
                     ))
@@ -6514,6 +6536,39 @@ impl ApiKeysWidget {
                 .finish()
         }
 
+        fn render_local_backend_toggle(
+            switch_state: SwitchStateHandle,
+            is_enabled: bool,
+            is_toggleable: bool,
+            app: &AppContext,
+        ) -> Box<dyn Element> {
+            let appearance = Appearance::as_ref(app);
+            build_toggle_element(
+                Text::new_inline(
+                    "Use local OpenAI-compatible text backend",
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE,
+                )
+                .with_color(styles::header_font_color(is_toggleable, app).into())
+                .finish(),
+                render_ai_feature_switch(
+                    switch_state,
+                    is_enabled,
+                    is_toggleable,
+                    AISettingsPageAction::ToggleLocalOpenAITextBackend,
+                    app,
+                ),
+                appearance,
+                None,
+            )
+        }
+
+        column.add_child(render_local_backend_toggle(
+            self.local_openai_text_backend_switch.clone(),
+            local_backend_enabled,
+            is_enabled,
+            app,
+        ));
         column.add_child(render_api_key_input(
             appearance,
             "OpenAI API Key",
@@ -6525,6 +6580,13 @@ impl ApiKeysWidget {
             appearance,
             "OpenAI Base URL",
             self.openai_base_url_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenAI Model",
+            self.openai_model_editor.clone(),
             is_enabled,
             app,
         ));
@@ -6645,7 +6707,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt openrouter base url baseurl"
+        "api keys bring your own byo openai anthropic google claude gemini gpt openrouter base url baseurl model local backend"
     }
 
     fn render(
