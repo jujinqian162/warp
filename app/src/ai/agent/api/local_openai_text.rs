@@ -41,10 +41,14 @@ fn require_setting(value: Option<String>, name: &'static str) -> Result<String, 
         })
 }
 
-fn local_model(model: Option<String>) -> String {
-    model
+fn local_model(configured_model: Option<String>, selected_model: &str) -> String {
+    configured_model
         .map(|model| model.trim().to_owned())
         .filter(|model| !model.is_empty())
+        .or_else(|| {
+            let selected_model = selected_model.trim();
+            (!selected_model.is_empty()).then(|| selected_model.to_owned())
+        })
         .unwrap_or_else(|| DEFAULT_LOCAL_MODEL.to_string())
 }
 
@@ -312,7 +316,7 @@ fn local_text_stream(
                 return;
             }
         };
-        let model = local_model(settings.model);
+        let model = local_model(settings.model, params.model.as_str());
         let prompt = match extract_user_query(&params.input) {
             Ok(value) => value,
             Err(error) => {

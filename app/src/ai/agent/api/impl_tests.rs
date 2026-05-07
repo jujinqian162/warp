@@ -177,6 +177,20 @@ fn local_openai_text_creates_task_when_request_has_no_active_tasks() {
         });
 }
 
+#[test]
+fn local_openai_text_uses_selected_model_when_local_model_setting_is_empty() {
+    let server_api = crate::server::server_api::ServerApiProvider::new_for_test().get();
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            local_openai_text_uses_selected_model_when_local_model_setting_is_empty_async(
+                server_api,
+            )
+            .await;
+        });
+}
+
 async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(
     server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
 ) {
@@ -277,6 +291,67 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
 
     assert_eq!(text_from_event(second), "hel");
     assert_eq!(text_from_event(third), "lo");
+    mock.assert_async().await;
+}
+
+async fn local_openai_text_uses_selected_model_when_local_model_setting_is_empty_async(
+    server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
+) {
+    use futures_util::StreamExt as _;
+    use mockito::{Matcher, Server};
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer sk-local")
+        .match_body(Matcher::PartialJson(serde_json::json!({
+            "model": "selected-model",
+            "stream": true,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ]
+        })))
+        .with_status(200)
+        .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+        .create_async()
+        .await;
+
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.input = vec![user_query_input("hello")];
+    params.model = LLMId::from("selected-model");
+    params.tasks = vec![api::Task {
+        id: "task-1".to_string(),
+        description: "test".to_string(),
+        ..Default::default()
+    }];
+    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+        api_key: Some("sk-local".to_string()),
+        base_url: Some(format!("{}/v1", server.url())),
+        model: None,
+    });
+
+    let (_tx, rx) = futures::channel::oneshot::channel();
+    let mut stream = super::generate_multi_agent_output(server_api, params, rx)
+        .await
+        .expect("stream should be created");
+
+    assert!(matches!(
+        stream
+            .next()
+            .await
+            .expect("init event")
+            .expect("init ok")
+            .r#type,
+        Some(api::response_event::Type::Init(_))
+    ));
+    assert!(
+        stream.next().await.expect("add event").is_ok(),
+        "selected model request should match the local endpoint mock"
+    );
+
     mock.assert_async().await;
 }
 
