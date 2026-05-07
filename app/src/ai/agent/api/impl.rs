@@ -7,9 +7,27 @@ use warp_multi_agent_api as api;
 
 use crate::server::server_api::ServerApi;
 
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use super::{
+    convert_to::convert_input, ConvertToAPITypeError, MultiAgentBackend, RequestParams,
+    ResponseStream,
+};
 
 pub async fn generate_multi_agent_output(
+    server_api: Arc<ServerApi>,
+    params: RequestParams,
+    cancellation_rx: futures::channel::oneshot::Receiver<()>,
+) -> Result<ResponseStream, ConvertToAPITypeError> {
+    match params.backend.clone() {
+        MultiAgentBackend::WarpServer => {
+            generate_warp_server_multi_agent_output(server_api, params, cancellation_rx).await
+        }
+        MultiAgentBackend::LocalOpenAIText(_) => Err(ConvertToAPITypeError::Unimplemented(
+            "local OpenAI text backend".to_owned(),
+        )),
+    }
+}
+
+async fn generate_warp_server_multi_agent_output(
     server_api: Arc<ServerApi>,
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,

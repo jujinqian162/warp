@@ -93,6 +93,19 @@ impl TryFrom<ServerConversationToken>
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiAgentBackend {
+    WarpServer,
+    LocalOpenAIText(LocalOpenAITextBackendSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalOpenAITextBackendSettings {
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestParams {
     pub input: Vec<AIAgentInput>,
@@ -130,6 +143,7 @@ pub struct RequestParams {
     pub parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     pub agent_name: Option<String>,
+    pub backend: MultiAgentBackend,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -235,7 +249,17 @@ impl RequestParams {
         let should_redact_secrets = get_secret_obfuscation_mode(app).should_redact_secret();
 
         let user_workspaces = UserWorkspaces::as_ref(app);
-        let api_keys = ApiKeyManager::as_ref(app).api_keys_for_request(
+        let api_key_manager = ApiKeyManager::as_ref(app);
+        let backend = if api_key_manager.is_local_openai_text_backend_enabled() {
+            MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+                api_key: api_key_manager.keys().openai.clone(),
+                base_url: api_key_manager.openai_base_url().map(ToOwned::to_owned),
+                model: api_key_manager.openai_model().map(ToOwned::to_owned),
+            })
+        } else {
+            MultiAgentBackend::WarpServer
+        };
+        let api_keys = api_key_manager.api_keys_for_request(
             user_workspaces.is_byo_api_key_enabled(),
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
         );
@@ -332,6 +356,7 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+            backend,
         }
     }
 }

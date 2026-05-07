@@ -1,4 +1,4 @@
-use crate::ai::agent::api::RequestParams;
+use crate::ai::agent::api::{MultiAgentBackend, RequestParams};
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use warp_core::features::FeatureFlag;
@@ -40,6 +40,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         supported_tools_override: None,
         parent_agent_id: None,
         agent_name: None,
+        backend: MultiAgentBackend::WarpServer,
     }
 }
 
