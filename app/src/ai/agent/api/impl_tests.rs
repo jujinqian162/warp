@@ -1,6 +1,4 @@
-use crate::ai::agent::api::{
-    LocalOpenAITextBackendSettings, MultiAgentBackend, RequestParams,
-};
+use crate::ai::agent::api::{LocalOpenAITextBackendSettings, MultiAgentBackend, RequestParams};
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use warp_core::features::FeatureFlag;
@@ -118,8 +116,7 @@ fn local_openai_text_ignores_done_delta() {
 fn local_openai_text_extracts_plain_user_query() {
     let input = vec![user_query_input(" hello ")];
 
-    let query =
-        super::super::local_openai_text::tests_support::extract_user_query(&input).unwrap();
+    let query = super::super::local_openai_text::tests_support::extract_user_query(&input).unwrap();
 
     assert_eq!(query, "hello");
 }
@@ -161,10 +158,12 @@ fn local_openai_text_extracts_active_task_id() {
 fn local_openai_text_posts_to_configured_base_url_and_emits_text_events() {
     let server_api = crate::server::server_api::ServerApiProvider::new_for_test().get();
 
-    tokio::runtime::Runtime::new().unwrap().block_on(async move {
-        local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(server_api)
-            .await;
-    });
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(server_api)
+                .await;
+        });
 }
 
 async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(
@@ -221,7 +220,11 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
     ));
 
     let second = stream.next().await.expect("add event").expect("add ok");
-    let third = stream.next().await.expect("append event").expect("append ok");
+    let third = stream
+        .next()
+        .await
+        .expect("append event")
+        .expect("append ok");
     let fourth = stream
         .next()
         .await
@@ -249,9 +252,7 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
             api::client_action::Action::AppendToMessageContent(append) => {
                 assert_eq!(
                     append.mask.unwrap().paths,
-                    vec![
-                        super::super::local_openai_text::tests_support::AGENT_OUTPUT_FIELD_MASK
-                    ]
+                    vec![super::super::local_openai_text::tests_support::AGENT_OUTPUT_FIELD_MASK]
                 );
                 let message = append.message.unwrap();
                 let Some(api::message::Message::AgentOutput(output)) = message.message else {
