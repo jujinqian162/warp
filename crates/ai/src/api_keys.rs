@@ -23,6 +23,10 @@ pub struct ApiKeys {
     pub openai: Option<String>,
     pub open_router: Option<String>,
     pub openai_base_url: Option<String>,
+    #[serde(default)]
+    pub openai_model: Option<String>,
+    #[serde(default)]
+    pub local_openai_text_backend_enabled: bool,
 }
 
 impl ApiKeys {
@@ -102,6 +106,30 @@ impl ApiKeyManager {
 
     pub fn openai_base_url(&self) -> Option<&str> {
         self.keys.openai_base_url.as_deref()
+    }
+
+    pub fn set_openai_model(&mut self, model: Option<String>, ctx: &mut ModelContext<Self>) {
+        self.keys.openai_model = normalize_optional_string(model);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn openai_model(&self) -> Option<&str> {
+        self.keys.openai_model.as_deref()
+    }
+
+    pub fn set_local_openai_text_backend_enabled(
+        &mut self,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.local_openai_text_backend_enabled = enabled;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn is_local_openai_text_backend_enabled(&self) -> bool {
+        self.keys.local_openai_text_backend_enabled
     }
 
     pub fn set_aws_credentials_state(
@@ -272,5 +300,46 @@ mod tests {
         );
         assert_eq!(normalize_optional_string(Some("   ".to_string())), None);
         assert_eq!(normalize_optional_string(None), None);
+    }
+
+    #[test]
+    fn local_openai_text_backend_settings_round_trip() {
+        let keys: ApiKeys = serde_json::from_str(
+            r#"{
+                "openai":"sk-test",
+                "openai_base_url":"https://proxy.example.com/v1",
+                "openai_model":"gpt-local",
+                "local_openai_text_backend_enabled":true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(keys.openai.as_deref(), Some("sk-test"));
+        assert_eq!(
+            keys.openai_base_url.as_deref(),
+            Some("https://proxy.example.com/v1")
+        );
+        assert_eq!(keys.openai_model.as_deref(), Some("gpt-local"));
+        assert!(keys.local_openai_text_backend_enabled);
+
+        let stored = serde_json::to_value(keys).unwrap();
+        assert_eq!(
+            stored
+                .get("local_openai_text_backend_enabled")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            stored.get("openai_model").and_then(|value| value.as_str()),
+            Some("gpt-local")
+        );
+    }
+
+    #[test]
+    fn openai_model_is_normalized_like_base_url() {
+        assert_eq!(
+            normalize_optional_string(Some("  gpt-local  ".to_string())),
+            Some("gpt-local".to_string())
+        );
     }
 }
