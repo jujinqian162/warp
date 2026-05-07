@@ -330,12 +330,8 @@ fn local_text_stream(
         let active_task = active_task(&params, &prompt);
 
         let request_id = Uuid::new_v4().to_string();
-        let conversation_id = params
-            .conversation_token
-            .as_ref()
-            .map(|token| token.as_str().to_owned())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let run_id = format!("local-openai-text-{conversation_id}");
+        let conversation_id = String::new();
+        let run_id = format!("local-openai-text-{}", Uuid::new_v4());
         let message_id = Uuid::new_v4().to_string();
 
         yield Ok(init_event(conversation_id, request_id.clone(), run_id));

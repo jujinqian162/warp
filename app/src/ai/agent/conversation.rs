@@ -1571,8 +1571,10 @@ impl AIConversation {
             });
         }
 
-        self.server_conversation_token =
-            Some(ServerConversationToken::new(init_event.conversation_id));
+        if !init_event.conversation_id.is_empty() {
+            self.server_conversation_token =
+                Some(ServerConversationToken::new(init_event.conversation_id));
+        }
         let run_id = Some(init_event.run_id).filter(|s| !s.is_empty());
         self.task_id = run_id.as_deref().and_then(|id| id.parse().ok());
         Ok(())

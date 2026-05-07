@@ -464,15 +464,14 @@ async fn local_openai_text_creates_task_when_request_has_no_active_tasks_async(
         .await
         .expect("stream should be created");
 
-    assert!(matches!(
-        stream
-            .next()
-            .await
-            .expect("init event")
-            .expect("init ok")
-            .r#type,
-        Some(api::response_event::Type::Init(_))
-    ));
+    let init_event = stream.next().await.expect("init event").expect("init ok");
+    let Some(api::response_event::Type::Init(init)) = init_event.r#type else {
+        panic!("expected init event");
+    };
+    assert!(
+        init.conversation_id.is_empty(),
+        "new local backend conversations should not claim a cloud conversation id"
+    );
 
     let create_event = stream
         .next()
