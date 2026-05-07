@@ -124,6 +124,69 @@ fn test_upsert_message_adds_start_agent_prompt_to_output() {
     assert_start_agent_prompt(&task, exchange_id, "run tests");
 }
 
+fn create_agent_output_message(id: &str, task_id: &str, text: &str) -> api::Message {
+    api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::AgentOutput(
+            api::message::AgentOutput {
+                text: text.to_string(),
+            },
+        )),
+        request_id: "request-1".to_string(),
+        timestamp: None,
+    }
+}
+
+#[test]
+fn append_to_message_content_updates_streaming_agent_output() {
+    let task_id = "task1";
+    let mut task = create_server_task(create_api_task(task_id, vec![]));
+
+    let exchange = create_streaming_exchange_with_output();
+    let exchange_id = exchange.id;
+    task.append_exchange(exchange);
+
+    task.add_messages(
+        vec![create_agent_output_message("agent-message", task_id, "I")],
+        exchange_id,
+        None,
+        None,
+        false,
+    )
+    .expect("initial message should be added");
+
+    task.append_to_message_content(
+        create_agent_output_message("agent-message", task_id, " am"),
+        exchange_id,
+        None,
+        None,
+        FieldMask {
+            paths: vec!["agent_output.text".to_string()],
+        },
+    )
+    .expect("message content should append");
+
+    let exchange = task.exchange(exchange_id).expect("exchange should exist");
+    let output = exchange
+        .output_status
+        .output()
+        .expect("output should be initialized");
+    let output = output.get();
+    let text = output
+        .text_from_agent_output()
+        .last()
+        .and_then(|text| text.sections.first())
+        .and_then(|section| match section {
+            crate::ai::agent::AIAgentTextSection::PlainText { text } => Some(text.text()),
+            _ => None,
+        });
+
+    assert_eq!(text, Some("I am"));
+}
+
 // =============================================================================
 // Tests for Task::splice_messages()
 // =============================================================================

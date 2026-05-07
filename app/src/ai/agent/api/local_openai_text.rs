@@ -19,7 +19,7 @@ use crate::{
 const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 const DEFAULT_LOCAL_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_LOCAL_MAX_TOKENS: u32 = 4096;
-const AGENT_OUTPUT_FIELD_MASK: &str = "message.agent_output.text";
+const AGENT_OUTPUT_FIELD_MASK: &str = "agent_output.text";
 
 pub async fn generate_text_output(
     settings: LocalOpenAITextBackendSettings,
