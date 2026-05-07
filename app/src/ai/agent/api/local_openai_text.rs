@@ -18,6 +18,7 @@ use crate::{
 
 const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 const DEFAULT_LOCAL_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_LOCAL_MAX_TOKENS: u32 = 4096;
 const AGENT_OUTPUT_FIELD_MASK: &str = "message.agent_output.text";
 
 pub async fn generate_text_output(
@@ -117,6 +118,7 @@ struct ChatCompletionsRequest {
     model: String,
     messages: Vec<ChatMessage>,
     stream: bool,
+    max_tokens: u32,
 }
 
 #[derive(serde::Serialize)]
@@ -270,6 +272,7 @@ async fn chat_completion_deltas(
         .json(&ChatCompletionsRequest {
             model,
             stream: true,
+            max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
             messages: vec![ChatMessage {
                 role: "user",
                 content: prompt,
