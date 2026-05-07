@@ -166,6 +166,17 @@ fn local_openai_text_posts_to_configured_base_url_and_emits_text_events() {
         });
 }
 
+#[test]
+fn local_openai_text_creates_task_when_request_has_no_active_tasks() {
+    let server_api = crate::server::server_api::ServerApiProvider::new_for_test().get();
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            local_openai_text_creates_task_when_request_has_no_active_tasks_async(server_api).await;
+        });
+}
+
 async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(
     server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
 ) {
@@ -266,5 +277,85 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
 
     assert_eq!(text_from_event(second), "hel");
     assert_eq!(text_from_event(third), "lo");
+    mock.assert_async().await;
+}
+
+async fn local_openai_text_creates_task_when_request_has_no_active_tasks_async(
+    server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
+) {
+    use futures_util::StreamExt as _;
+    use mockito::{Matcher, Server};
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer sk-local")
+        .match_body(Matcher::PartialJson(serde_json::json!({
+            "model": "local-model",
+            "stream": true,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ]
+        })))
+        .with_status(200)
+        .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+        .create_async()
+        .await;
+
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.input = vec![user_query_input("hello")];
+    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+        api_key: Some("sk-local".to_string()),
+        base_url: Some(format!("{}/v1", server.url())),
+        model: Some("local-model".to_string()),
+    });
+
+    let (_tx, rx) = futures::channel::oneshot::channel();
+    let mut stream = super::generate_multi_agent_output(server_api, params, rx)
+        .await
+        .expect("stream should be created");
+
+    assert!(matches!(
+        stream
+            .next()
+            .await
+            .expect("init event")
+            .expect("init ok")
+            .r#type,
+        Some(api::response_event::Type::Init(_))
+    ));
+
+    let create_event = stream
+        .next()
+        .await
+        .expect("create task event")
+        .expect("create task ok");
+    let Some(api::response_event::Type::ClientActions(actions)) = create_event.r#type else {
+        panic!("expected client actions");
+    };
+    let action = actions.actions.into_iter().next().unwrap().action.unwrap();
+    let api::client_action::Action::CreateTask(create_task) = action else {
+        panic!("expected create task action");
+    };
+    let created_task = create_task.task.expect("created task");
+    assert!(!created_task.id.is_empty());
+
+    let add_event = stream
+        .next()
+        .await
+        .expect("add message event")
+        .expect("add message ok");
+    let Some(api::response_event::Type::ClientActions(actions)) = add_event.r#type else {
+        panic!("expected client actions");
+    };
+    let action = actions.actions.into_iter().next().unwrap().action.unwrap();
+    let api::client_action::Action::AddMessagesToTask(add) = action else {
+        panic!("expected add messages action");
+    };
+    assert_eq!(add.task_id, created_task.id);
+
     mock.assert_async().await;
 }

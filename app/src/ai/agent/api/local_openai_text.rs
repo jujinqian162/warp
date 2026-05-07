@@ -68,6 +68,35 @@ fn extract_user_query(inputs: &[AIAgentInput]) -> Result<String, AIApiError> {
     }
 }
 
+struct ActiveTask {
+    id: String,
+    create_event: Option<api::ResponseEvent>,
+}
+
+fn active_task(params: &RequestParams, prompt: &str) -> ActiveTask {
+    if let Some(id) = params
+        .tasks
+        .first()
+        .map(|task| task.id.trim().to_owned())
+        .filter(|id| !id.is_empty())
+    {
+        return ActiveTask {
+            id,
+            create_event: None,
+        };
+    }
+
+    let id = Uuid::new_v4().to_string();
+    ActiveTask {
+        id: id.clone(),
+        create_event: Some(create_task_event(api::Task {
+            id,
+            description: prompt.to_owned(),
+            ..Default::default()
+        })),
+    }
+}
+
 fn active_task_id(params: &RequestParams) -> Result<String, AIApiError> {
     params
         .tasks
@@ -159,6 +188,20 @@ fn add_message_event(task_id: &str, message: api::Message) -> api::ResponseEvent
                             task_id: task_id.to_owned(),
                             messages: vec![message],
                         },
+                    )),
+                }],
+            },
+        )),
+    }
+}
+
+fn create_task_event(task: api::Task) -> api::ResponseEvent {
+    api::ResponseEvent {
+        r#type: Some(api::response_event::Type::ClientActions(
+            api::response_event::ClientActions {
+                actions: vec![api::ClientAction {
+                    action: Some(api::client_action::Action::CreateTask(
+                        api::client_action::CreateTask { task: Some(task) },
                     )),
                 }],
             },
@@ -277,13 +320,7 @@ fn local_text_stream(
                 return;
             }
         };
-        let task_id = match active_task_id(&params) {
-            Ok(value) => value,
-            Err(error) => {
-                yield Err(Arc::new(error));
-                return;
-            }
-        };
+        let active_task = active_task(&params, &prompt);
 
         let request_id = Uuid::new_v4().to_string();
         let conversation_id = params
@@ -312,23 +349,27 @@ fn local_text_stream(
             }
         };
 
+        if let Some(create_event) = active_task.create_event {
+            yield Ok(create_event);
+        }
+
         let mut has_message = false;
         for delta in deltas {
-            let message = agent_output_message(&message_id, &task_id, &request_id, delta);
+            let message = agent_output_message(&message_id, &active_task.id, &request_id, delta);
             if has_message {
-                yield Ok(append_message_event(&task_id, message));
+                yield Ok(append_message_event(&active_task.id, message));
             } else {
                 has_message = true;
-                yield Ok(add_message_event(&task_id, message));
+                yield Ok(add_message_event(&active_task.id, message));
             }
         }
 
         if !has_message {
             yield Ok(add_message_event(
-                &task_id,
+                &active_task.id,
                 agent_output_message(
                     &message_id,
-                    &task_id,
+                    &active_task.id,
                     &request_id,
                     String::new(),
                 ),
