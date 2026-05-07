@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use futures::channel::oneshot;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -254,50 +254,140 @@ fn parse_sse_delta(line: &str) -> Result<Option<String>, AIApiError> {
         .find(|content| !content.is_empty()))
 }
 
-async fn chat_completion_deltas(
+fn is_done_sse_line(line: &str) -> bool {
+    line.trim() == "data: [DONE]"
+}
+
+fn push_utf8_text(
+    pending_bytes: &mut Vec<u8>,
+    text_buffer: &mut String,
+    bytes: &[u8],
+) -> Result<(), AIApiError> {
+    pending_bytes.extend_from_slice(bytes);
+
+    loop {
+        match std::str::from_utf8(pending_bytes) {
+            Ok(text) => {
+                text_buffer.push_str(text);
+                pending_bytes.clear();
+                return Ok(());
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid_text = std::str::from_utf8(&pending_bytes[..valid_up_to])
+                        .expect("valid_up_to must split at a valid UTF-8 boundary")
+                        .to_owned();
+                    text_buffer.push_str(&valid_text);
+                    pending_bytes.drain(..valid_up_to);
+                }
+
+                if error.error_len().is_some() {
+                    return Err(AIApiError::Other(anyhow!(
+                        "Local OpenAI text backend received invalid UTF-8 in SSE response"
+                    )));
+                }
+
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn flush_utf8_text(
+    pending_bytes: &mut Vec<u8>,
+    text_buffer: &mut String,
+) -> Result<(), AIApiError> {
+    if pending_bytes.is_empty() {
+        return Ok(());
+    }
+
+    match std::str::from_utf8(pending_bytes) {
+        Ok(text) => {
+            text_buffer.push_str(text);
+            pending_bytes.clear();
+            Ok(())
+        }
+        Err(_) => Err(AIApiError::Other(anyhow!(
+            "Local OpenAI text backend received incomplete UTF-8 in SSE response"
+        ))),
+    }
+}
+
+fn take_sse_line(text_buffer: &mut String) -> Option<String> {
+    let newline_index = text_buffer.find('\n')?;
+    let mut line: String = text_buffer.drain(..=newline_index).collect();
+    if line.ends_with('\n') {
+        line.pop();
+    }
+    if line.ends_with('\r') {
+        line.pop();
+    }
+    Some(line)
+}
+
+fn chat_completion_delta_stream(
     client: reqwest::Client,
     base_url: String,
     api_key: String,
     model: String,
     prompt: String,
-) -> Result<Vec<String>, AIApiError> {
-    let url = format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        CHAT_COMPLETIONS_PATH
-    );
-    let response = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(&ChatCompletionsRequest {
-            model,
-            stream: true,
-            max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
-            messages: vec![ChatMessage {
-                role: "user",
-                content: prompt,
-            }],
-        })
-        .send()
-        .await?;
+) -> impl futures_lite::Stream<Item = Result<String, AIApiError>> + Send + 'static {
+    try_stream! {
+        let url = format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            CHAT_COMPLETIONS_PATH
+        );
+        let response = client
+            .post(url)
+            .bearer_auth(api_key)
+            .json(&ChatCompletionsRequest {
+                model,
+                stream: true,
+                max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
+                messages: vec![ChatMessage {
+                    role: "user",
+                    content: prompt,
+                }],
+            })
+            .send()
+            .await?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|error| format!("(no response body: {error:#})"));
-        return Err(AIApiError::ErrorStatus(status, body));
-    }
+        let status = response.status();
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|error| format!("(no response body: {error:#})"));
+            Err(AIApiError::ErrorStatus(status, body))?;
+        } else {
+            let mut chunks = response.bytes_stream();
+            let mut pending_bytes = Vec::new();
+            let mut text_buffer = String::new();
 
-    let body = response.text().await?;
-    let mut deltas = Vec::new();
-    for line in body.lines() {
-        if let Some(delta) = parse_sse_delta(line)? {
-            deltas.push(delta);
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk?;
+                push_utf8_text(&mut pending_bytes, &mut text_buffer, &chunk)?;
+
+                while let Some(line) = take_sse_line(&mut text_buffer) {
+                    if is_done_sse_line(&line) {
+                        return;
+                    }
+                    if let Some(delta) = parse_sse_delta(&line)? {
+                        yield delta;
+                    }
+                }
+            }
+
+            flush_utf8_text(&mut pending_bytes, &mut text_buffer)?;
+            if !text_buffer.is_empty() {
+                if let Some(delta) = parse_sse_delta(&text_buffer)? {
+                    yield delta;
+                }
+            }
         }
     }
-    Ok(deltas)
 }
 
 fn local_text_stream(
@@ -336,20 +426,21 @@ fn local_text_stream(
 
         yield Ok(init_event(conversation_id, request_id.clone(), run_id));
 
-        let deltas = match chat_completion_deltas(
+        let mut deltas = Box::pin(chat_completion_delta_stream(
             reqwest::Client::new(),
             base_url,
             api_key,
             model,
             prompt,
-        )
-        .await
-        {
-            Ok(deltas) => deltas,
-            Err(error) => {
+        ));
+
+        let first_delta = match deltas.next().await {
+            Some(Ok(delta)) => Some(delta),
+            Some(Err(error)) => {
                 yield Err(Arc::new(error));
                 return;
             }
+            None => None,
         };
 
         if let Some(create_event) = active_task.create_event {
@@ -357,7 +448,20 @@ fn local_text_stream(
         }
 
         let mut has_message = false;
-        for delta in deltas {
+        if let Some(delta) = first_delta {
+            let message = agent_output_message(&message_id, &active_task.id, &request_id, delta);
+            has_message = true;
+            yield Ok(add_message_event(&active_task.id, message));
+        }
+
+        while let Some(delta) = deltas.next().await {
+            let delta = match delta {
+                Ok(delta) => delta,
+                Err(error) => {
+                    yield Err(Arc::new(error));
+                    return;
+                }
+            };
             let message = agent_output_message(&message_id, &active_task.id, &request_id, delta);
             if has_message {
                 yield Ok(append_message_event(&active_task.id, message));

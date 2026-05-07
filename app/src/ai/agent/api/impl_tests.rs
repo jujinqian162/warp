@@ -202,6 +202,18 @@ fn local_openai_text_requests_default_completion_token_budget() {
         });
 }
 
+#[test]
+fn local_openai_text_emits_first_delta_before_sse_response_finishes() {
+    let server_api = crate::server::server_api::ServerApiProvider::new_for_test().get();
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            local_openai_text_emits_first_delta_before_sse_response_finishes_async(server_api)
+                .await;
+        });
+}
+
 async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_async(
     server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
 ) {
@@ -303,6 +315,94 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
     assert_eq!(text_from_event(second), "hel");
     assert_eq!(text_from_event(third), "lo");
     mock.assert_async().await;
+}
+
+async fn local_openai_text_emits_first_delta_before_sse_response_finishes_async(
+    server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
+) {
+    use axum::{
+        body::Body,
+        http::{header::CONTENT_TYPE, Response},
+        routing::post,
+        Router,
+    };
+    use bytes::Bytes;
+    use futures_util::StreamExt as _;
+    use std::{convert::Infallible, time::Duration};
+
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(|| async {
+            let body = async_stream::stream! {
+                yield Ok::<_, Infallible>(Bytes::from_static(
+                    b"data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+                ));
+                tokio::time::sleep(Duration::from_millis(750)).await;
+                yield Ok::<_, Infallible>(Bytes::from_static(
+                    b"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
+                      data: [DONE]\n\n",
+                ));
+            };
+
+            Response::builder()
+                .header(CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(body))
+                .unwrap()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.input = vec![user_query_input("hello")];
+    params.tasks = vec![api::Task {
+        id: "task-1".to_string(),
+        description: "test".to_string(),
+        ..Default::default()
+    }];
+    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+        api_key: Some("sk-local".to_string()),
+        base_url: Some(base_url),
+        model: Some("local-model".to_string()),
+    });
+
+    let (_tx, rx) = futures::channel::oneshot::channel();
+    let mut stream = super::generate_multi_agent_output(server_api, params, rx)
+        .await
+        .expect("stream should be created");
+
+    assert!(matches!(
+        stream
+            .next()
+            .await
+            .expect("init event")
+            .expect("init ok")
+            .r#type,
+        Some(api::response_event::Type::Init(_))
+    ));
+
+    let first_delta = tokio::time::timeout(Duration::from_millis(250), stream.next())
+        .await
+        .expect("first delta should arrive before the SSE response completes")
+        .expect("first delta event")
+        .expect("first delta ok");
+    let Some(api::response_event::Type::ClientActions(actions)) = first_delta.r#type else {
+        panic!("expected client actions");
+    };
+    let action = actions.actions.into_iter().next().unwrap().action.unwrap();
+    let api::client_action::Action::AddMessagesToTask(add) = action else {
+        panic!("expected add messages action");
+    };
+    let message = add.messages.into_iter().next().unwrap();
+    let Some(api::message::Message::AgentOutput(output)) = message.message else {
+        panic!("expected agent output");
+    };
+    assert_eq!(output.text, "hel");
 }
 
 async fn local_openai_text_requests_default_completion_token_budget_async(
