@@ -21,9 +21,9 @@ pub async fn generate_multi_agent_output(
         MultiAgentBackend::WarpServer => {
             generate_warp_server_multi_agent_output(server_api, params, cancellation_rx).await
         }
-        MultiAgentBackend::LocalOpenAIText(_) => Err(ConvertToAPITypeError::Unimplemented(
-            "local OpenAI text backend".to_owned(),
-        )),
+        MultiAgentBackend::LocalOpenAIText(settings) => {
+            super::local_openai_text::generate_text_output(settings, params, cancellation_rx).await
+        }
     }
 }
 
