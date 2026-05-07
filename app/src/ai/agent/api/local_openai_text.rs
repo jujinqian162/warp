@@ -338,3 +338,23 @@ fn local_text_stream(
         yield Ok(finished_event());
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    pub(crate) const AGENT_OUTPUT_FIELD_MASK: &str = super::AGENT_OUTPUT_FIELD_MASK;
+    pub(crate) const DEFAULT_LOCAL_MODEL: &str = super::DEFAULT_LOCAL_MODEL;
+
+    pub(crate) fn active_task_id(params: &RequestParams) -> Result<String, AIApiError> {
+        super::active_task_id(params)
+    }
+
+    pub(crate) fn extract_user_query(inputs: &[AIAgentInput]) -> Result<String, AIApiError> {
+        super::extract_user_query(inputs)
+    }
+
+    pub(crate) fn parse_sse_delta(line: &str) -> Result<Option<String>, AIApiError> {
+        super::parse_sse_delta(line)
+    }
+}
