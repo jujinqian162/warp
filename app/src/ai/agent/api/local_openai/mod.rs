@@ -169,6 +169,11 @@ fn local_text_stream(
         let (mcp_tools, mcp_registry) = tools::mcp_openai_tools(&params);
         let mut tools = tools::built_in_openai_tools(&params);
         tools.extend(mcp_tools);
+        log::info!(
+            "Local OpenAI backend selected: model={model}, tools={}, messages={}",
+            tools.len(),
+            prepared_history.messages.len()
+        );
         let request = chat::ChatCompletionsRequest {
             model,
             messages: prepared_history.messages,
@@ -219,6 +224,10 @@ fn local_text_stream(
         let has_tool_calls = !completed_tool_calls.is_empty();
 
         if has_tool_calls {
+            log::info!(
+                "Local OpenAI backend emitted {} tool call(s)",
+                completed_tool_calls.len()
+            );
             let mut messages = Vec::new();
             for call in completed_tool_calls {
                 match tools::tool_call_message_from_openai_call(
@@ -274,9 +283,7 @@ pub(crate) mod tests_support {
 
     pub(crate) use super::chat::OpenAIStreamEvent;
 
-    pub(crate) fn parse_sse_event(
-        line: &str,
-    ) -> Result<Option<OpenAIStreamEvent>, AIApiError> {
+    pub(crate) fn parse_sse_event(line: &str) -> Result<Option<OpenAIStreamEvent>, AIApiError> {
         super::chat::parse_sse_event(line)
     }
 
@@ -288,9 +295,7 @@ pub(crate) mod tests_support {
 
     pub(crate) use super::tools::CompletedOpenAIToolCall;
 
-    pub(crate) fn built_in_openai_tools(
-        params: &RequestParams,
-    ) -> Vec<super::chat::OpenAITool> {
+    pub(crate) fn built_in_openai_tools(params: &RequestParams) -> Vec<super::chat::OpenAITool> {
         super::tools::built_in_openai_tools(params)
     }
 

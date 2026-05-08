@@ -52,10 +52,7 @@ pub(super) fn add_message_event(task_id: &str, message: api::Message) -> api::Re
     add_messages_event(task_id, vec![message])
 }
 
-pub(super) fn add_messages_event(
-    task_id: &str,
-    messages: Vec<api::Message>,
-) -> api::ResponseEvent {
+pub(super) fn add_messages_event(task_id: &str, messages: Vec<api::Message>) -> api::ResponseEvent {
     api::ResponseEvent {
         r#type: Some(api::response_event::Type::ClientActions(
             api::response_event::ClientActions {

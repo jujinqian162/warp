@@ -281,12 +281,10 @@ pub(super) fn tool_call_message_from_openai_call(
             args: Some(serde_json_object_to_prost_struct(call.arguments)?),
         })
     } else if let Some(parsed) = mcp_registry.resource_by_function_name.get(&call.name) {
-        api::message::tool_call::Tool::ReadMcpResource(
-            api::message::tool_call::ReadMcpResource {
-                uri: parsed.uri.clone(),
-                server_id: parsed.server_id.clone(),
-            },
-        )
+        api::message::tool_call::Tool::ReadMcpResource(api::message::tool_call::ReadMcpResource {
+            uri: parsed.uri.clone(),
+            server_id: parsed.server_id.clone(),
+        })
     } else {
         built_in_warp_tool_from_openai_call(&call)?
     };
@@ -364,11 +362,21 @@ fn built_in_warp_tool_from_openai_call(
                 },
             ))
         }
-        "read_files" => Ok(api::message::tool_call::Tool::ReadFiles(read_files_call(&call.arguments)?)),
-        "search_codebase" => Ok(api::message::tool_call::Tool::SearchCodebase(search_codebase_call(&call.arguments)?)),
-        "grep" => Ok(api::message::tool_call::Tool::Grep(grep_call(&call.arguments)?)),
-        "file_glob" => Ok(api::message::tool_call::Tool::FileGlobV2(file_glob_call(&call.arguments)?)),
-        "apply_file_diffs" => Ok(api::message::tool_call::Tool::ApplyFileDiffs(apply_file_diffs_call(&call.arguments)?)),
+        "read_files" => Ok(api::message::tool_call::Tool::ReadFiles(read_files_call(
+            &call.arguments,
+        )?)),
+        "search_codebase" => Ok(api::message::tool_call::Tool::SearchCodebase(
+            search_codebase_call(&call.arguments)?,
+        )),
+        "grep" => Ok(api::message::tool_call::Tool::Grep(grep_call(
+            &call.arguments,
+        )?)),
+        "file_glob" => Ok(api::message::tool_call::Tool::FileGlobV2(file_glob_call(
+            &call.arguments,
+        )?)),
+        "apply_file_diffs" => Ok(api::message::tool_call::Tool::ApplyFileDiffs(
+            apply_file_diffs_call(&call.arguments)?,
+        )),
         other => Err(AIApiError::Other(anyhow!(
             "Local OpenAI backend received unsupported tool call {other}"
         ))),
@@ -449,20 +457,21 @@ fn read_files_call(arguments: &Value) -> Result<api::message::tool_call::ReadFil
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| invalid_tool_field("read_files", "files.path", "non-empty string"))?;
+                .ok_or_else(|| {
+                    invalid_tool_field("read_files", "files.path", "non-empty string")
+                })?;
             let line_ranges = match file.get("line_ranges") {
                 None => Vec::new(),
                 Some(Value::Array(ranges)) => ranges
                     .iter()
                     .map(|range| {
-                        let start = range
-                            .get("start")
-                            .and_then(Value::as_u64)
-                            .ok_or_else(|| invalid_tool_field("read_files", "line_ranges.start", "integer"))?;
-                        let end = range
-                            .get("end")
-                            .and_then(Value::as_u64)
-                            .ok_or_else(|| invalid_tool_field("read_files", "line_ranges.end", "integer"))?;
+                        let start =
+                            range.get("start").and_then(Value::as_u64).ok_or_else(|| {
+                                invalid_tool_field("read_files", "line_ranges.start", "integer")
+                            })?;
+                        let end = range.get("end").and_then(Value::as_u64).ok_or_else(|| {
+                            invalid_tool_field("read_files", "line_ranges.end", "integer")
+                        })?;
                         Ok(api::FileContentLineRange {
                             start: start as u32,
                             end: end as u32,
@@ -470,11 +479,7 @@ fn read_files_call(arguments: &Value) -> Result<api::message::tool_call::ReadFil
                     })
                     .collect::<Result<Vec<_>, AIApiError>>()?,
                 Some(_) => {
-                    return Err(invalid_tool_field(
-                        "read_files",
-                        "line_ranges",
-                        "array",
-                    ));
+                    return Err(invalid_tool_field("read_files", "line_ranges", "array"));
                 }
             };
             Ok(api::message::tool_call::read_files::File {
@@ -541,7 +546,9 @@ pub(super) fn openai_name_for_warp_tool_call(
     tool_call: &api::message::ToolCall,
 ) -> Result<String, AIApiError> {
     let Some(tool) = tool_call.tool.as_ref() else {
-        return Err(AIApiError::Other(anyhow!("Tool call is missing tool payload")));
+        return Err(AIApiError::Other(anyhow!(
+            "Tool call is missing tool payload"
+        )));
     };
 
     match tool {
@@ -551,9 +558,10 @@ pub(super) fn openai_name_for_warp_tool_call(
         api::message::tool_call::Tool::Grep(_) => Ok("grep".to_string()),
         api::message::tool_call::Tool::FileGlobV2(_) => Ok("file_glob".to_string()),
         api::message::tool_call::Tool::ApplyFileDiffs(_) => Ok("apply_file_diffs".to_string()),
-        api::message::tool_call::Tool::ReadMcpResource(resource) => {
-            Ok(mcp_resource_function_name(&resource.server_id, &resource.uri))
-        }
+        api::message::tool_call::Tool::ReadMcpResource(resource) => Ok(mcp_resource_function_name(
+            &resource.server_id,
+            &resource.uri,
+        )),
         api::message::tool_call::Tool::CallMcpTool(tool) => {
             Ok(mcp_tool_function_name(&tool.server_id, &tool.name))
         }
@@ -567,7 +575,9 @@ pub(super) fn openai_arguments_for_warp_tool_call(
     tool_call: &api::message::ToolCall,
 ) -> Result<String, AIApiError> {
     let Some(tool) = tool_call.tool.as_ref() else {
-        return Err(AIApiError::Other(anyhow!("Tool call is missing tool payload")));
+        return Err(AIApiError::Other(anyhow!(
+            "Tool call is missing tool payload"
+        )));
     };
 
     let arguments = match tool {

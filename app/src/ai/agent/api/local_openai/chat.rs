@@ -94,9 +94,7 @@ impl ToolCallAccumulator {
         call.arguments.push_str(&delta.arguments_delta);
     }
 
-    pub(super) fn finish(
-        self,
-    ) -> Result<Vec<super::tools::CompletedOpenAIToolCall>, AIApiError> {
+    pub(super) fn finish(self) -> Result<Vec<super::tools::CompletedOpenAIToolCall>, AIApiError> {
         self.calls
             .into_iter()
             .map(|(index, call)| {
