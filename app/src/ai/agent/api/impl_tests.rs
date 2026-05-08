@@ -328,6 +328,141 @@ async fn local_openai_streamed_tool_call_emits_warp_tool_call_message_async(
 }
 
 #[test]
+fn local_openai_action_result_follow_up_sends_tool_role_message_and_streams_answer() {
+    let server_api = crate::server::server_api::ServerApiProvider::new_for_test().get();
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            local_openai_action_result_follow_up_sends_tool_role_message_and_streams_answer_async(
+                server_api,
+            )
+            .await;
+        });
+}
+
+async fn local_openai_action_result_follow_up_sends_tool_role_message_and_streams_answer_async(
+    server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
+) {
+    use futures_util::StreamExt as _;
+    use mockito::{Matcher, Server};
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::PartialJson(serde_json::json!({
+            "messages": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "run_shell_command"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1"
+                }
+            ]
+        })))
+        .with_status(200)
+        .with_body(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"You are in /tmp/project.\"}}]}\n\n\
+             data: [DONE]\n\n",
+        )
+        .create_async()
+        .await;
+
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.tasks = vec![api::Task {
+        id: "task-1".to_string(),
+        description: "test".to_string(),
+        messages: vec![api::Message {
+            id: "tool-call-msg".to_string(),
+            task_id: "task-1".to_string(),
+            message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                tool_call_id: "call_1".to_string(),
+                tool: Some(api::message::tool_call::Tool::RunShellCommand(
+                    api::message::tool_call::RunShellCommand {
+                        command: "pwd".to_string(),
+                        ..Default::default()
+                    },
+                )),
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    params.input = vec![crate::ai::agent::AIAgentInput::ActionResult {
+        result: crate::ai::agent::AIAgentActionResult {
+            id: "call_1".to_string().into(),
+            task_id: crate::ai::agent::task::TaskId::new("task-1".to_string()),
+            result: crate::AIAgentActionResultType::RequestCommandOutput(
+                crate::ai::agent::RequestCommandOutputResult::Completed {
+                    block_id: "block-1".to_string().into(),
+                    command: "pwd".to_string(),
+                    output: "/tmp/project".to_string(),
+                    exit_code: warp_core::command::ExitCode::from(0),
+                },
+            ),
+        },
+        context: std::sync::Arc::from([]),
+    }];
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
+        api_key: Some("sk-local".to_string()),
+        base_url: Some(format!("{}/v1", server.url())),
+        model: Some("local-model".to_string()),
+    });
+
+    let (_tx, rx) = futures::channel::oneshot::channel();
+    let mut stream = super::generate_multi_agent_output(server_api, params, rx)
+        .await
+        .expect("stream should be created");
+
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap().r#type,
+        Some(api::response_event::Type::Init(_))
+    ));
+
+    let persisted_result = stream.next().await.unwrap().unwrap();
+    let Some(api::response_event::Type::ClientActions(actions)) = persisted_result.r#type else {
+        panic!("expected client actions");
+    };
+    let action = actions.actions.into_iter().next().unwrap().action.unwrap();
+    let api::client_action::Action::AddMessagesToTask(add) = action else {
+        panic!("expected add messages");
+    };
+    assert!(matches!(
+        add.messages[0].message,
+        Some(api::message::Message::ToolCallResult(_))
+    ));
+
+    let answer = stream.next().await.unwrap().unwrap();
+    let Some(api::response_event::Type::ClientActions(actions)) = answer.r#type else {
+        panic!("expected client actions");
+    };
+    let action = actions.actions.into_iter().next().unwrap().action.unwrap();
+    let api::client_action::Action::AddMessagesToTask(add) = action else {
+        panic!("expected add messages");
+    };
+    let Some(api::message::Message::AgentOutput(output)) = add.messages[0].message.as_ref() else {
+        panic!("expected agent output");
+    };
+    assert_eq!(output.text, "You are in /tmp/project.");
+
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap().r#type,
+        Some(api::response_event::Type::Finished(_))
+    ));
+    mock.assert_async().await;
+}
+
+#[test]
 fn local_openai_text_rejects_non_user_query() {
     let input = vec![crate::ai::agent::AIAgentInput::ResumeConversation {
         context: std::sync::Arc::from([]),
