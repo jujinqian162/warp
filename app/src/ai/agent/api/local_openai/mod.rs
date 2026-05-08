@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use async_stream::{stream, try_stream};
+use async_stream::stream;
 use futures::channel::oneshot;
 use futures_util::StreamExt;
-use serde::Deserialize;
 use uuid::Uuid;
 use warp_multi_agent_api as api;
 
+mod chat;
 mod events;
 
 use crate::{
@@ -18,7 +18,6 @@ use crate::{
     server::server_api::AIApiError,
 };
 
-const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 const DEFAULT_LOCAL_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_LOCAL_MAX_TOKENS: u32 = 4096;
 
@@ -114,188 +113,8 @@ fn active_task_id(params: &RequestParams) -> Result<String, AIApiError> {
         })
 }
 
-#[derive(serde::Serialize)]
-struct ChatCompletionsRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    stream: bool,
-    max_tokens: u32,
-}
-
-#[derive(serde::Serialize)]
-struct ChatMessage {
-    role: &'static str,
-    content: String,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionChunk {
-    choices: Vec<ChatCompletionChoice>,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionChoice {
-    delta: ChatCompletionDelta,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionDelta {
-    content: Option<String>,
-}
-
 fn parse_sse_delta(line: &str) -> Result<Option<String>, AIApiError> {
-    let line = line.trim();
-    if line.is_empty() || !line.starts_with("data:") {
-        return Ok(None);
-    }
-
-    let payload = line.trim_start_matches("data:").trim();
-    if payload == "[DONE]" {
-        return Ok(None);
-    }
-
-    let chunk: ChatCompletionChunk = serde_json::from_str(payload)?;
-    Ok(chunk
-        .choices
-        .into_iter()
-        .filter_map(|choice| choice.delta.content)
-        .find(|content| !content.is_empty()))
-}
-
-fn is_done_sse_line(line: &str) -> bool {
-    line.trim() == "data: [DONE]"
-}
-
-fn push_utf8_text(
-    pending_bytes: &mut Vec<u8>,
-    text_buffer: &mut String,
-    bytes: &[u8],
-) -> Result<(), AIApiError> {
-    pending_bytes.extend_from_slice(bytes);
-
-    loop {
-        match std::str::from_utf8(pending_bytes) {
-            Ok(text) => {
-                text_buffer.push_str(text);
-                pending_bytes.clear();
-                return Ok(());
-            }
-            Err(error) => {
-                let valid_up_to = error.valid_up_to();
-                if valid_up_to > 0 {
-                    let valid_text = std::str::from_utf8(&pending_bytes[..valid_up_to])
-                        .expect("valid_up_to must split at a valid UTF-8 boundary")
-                        .to_owned();
-                    text_buffer.push_str(&valid_text);
-                    pending_bytes.drain(..valid_up_to);
-                }
-
-                if error.error_len().is_some() {
-                    return Err(AIApiError::Other(anyhow!(
-                        "Local OpenAI text backend received invalid UTF-8 in SSE response"
-                    )));
-                }
-
-                return Ok(());
-            }
-        }
-    }
-}
-
-fn flush_utf8_text(
-    pending_bytes: &mut Vec<u8>,
-    text_buffer: &mut String,
-) -> Result<(), AIApiError> {
-    if pending_bytes.is_empty() {
-        return Ok(());
-    }
-
-    match std::str::from_utf8(pending_bytes) {
-        Ok(text) => {
-            text_buffer.push_str(text);
-            pending_bytes.clear();
-            Ok(())
-        }
-        Err(_) => Err(AIApiError::Other(anyhow!(
-            "Local OpenAI text backend received incomplete UTF-8 in SSE response"
-        ))),
-    }
-}
-
-fn take_sse_line(text_buffer: &mut String) -> Option<String> {
-    let newline_index = text_buffer.find('\n')?;
-    let mut line: String = text_buffer.drain(..=newline_index).collect();
-    if line.ends_with('\n') {
-        line.pop();
-    }
-    if line.ends_with('\r') {
-        line.pop();
-    }
-    Some(line)
-}
-
-fn chat_completion_delta_stream(
-    client: reqwest::Client,
-    base_url: String,
-    api_key: String,
-    model: String,
-    prompt: String,
-) -> impl futures_lite::Stream<Item = Result<String, AIApiError>> + Send + 'static {
-    try_stream! {
-        let url = format!(
-            "{}/{}",
-            base_url.trim_end_matches('/'),
-            CHAT_COMPLETIONS_PATH
-        );
-        let response = client
-            .post(url)
-            .bearer_auth(api_key)
-            .json(&ChatCompletionsRequest {
-                model,
-                stream: true,
-                max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
-                messages: vec![ChatMessage {
-                    role: "user",
-                    content: prompt,
-                }],
-            })
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|error| format!("(no response body: {error:#})"));
-            Err(AIApiError::ErrorStatus(status, body))?;
-        } else {
-            let mut chunks = response.bytes_stream();
-            let mut pending_bytes = Vec::new();
-            let mut text_buffer = String::new();
-
-            while let Some(chunk) = chunks.next().await {
-                let chunk = chunk?;
-                push_utf8_text(&mut pending_bytes, &mut text_buffer, &chunk)?;
-
-                while let Some(line) = take_sse_line(&mut text_buffer) {
-                    if is_done_sse_line(&line) {
-                        return;
-                    }
-                    if let Some(delta) = parse_sse_delta(&line)? {
-                        yield delta;
-                    }
-                }
-            }
-
-            flush_utf8_text(&mut pending_bytes, &mut text_buffer)?;
-            if !text_buffer.is_empty() {
-                if let Some(delta) = parse_sse_delta(&text_buffer)? {
-                    yield delta;
-                }
-            }
-        }
-    }
+    chat::parse_sse_delta(line)
 }
 
 fn local_text_stream(
@@ -334,16 +153,30 @@ fn local_text_stream(
 
         yield Ok(events::init_event(conversation_id, request_id.clone(), run_id));
 
-        let mut deltas = Box::pin(chat_completion_delta_stream(
+        let request = chat::ChatCompletionsRequest {
+            model,
+            messages: vec![chat::OpenAIChatMessage {
+                role: "user",
+                content: Some(prompt),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            stream: true,
+            max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
+            tools: vec![],
+            tool_choice: None,
+        };
+
+        let mut deltas = Box::pin(chat::chat_completion_event_stream(
             reqwest::Client::new(),
             base_url,
             api_key,
-            model,
-            prompt,
+            request,
         ));
 
         let first_delta = match deltas.next().await {
-            Some(Ok(delta)) => Some(delta),
+            Some(Ok(chat::OpenAIStreamEvent::Content(delta))) => Some(delta),
+            Some(Ok(_)) => None,
             Some(Err(error)) => {
                 yield Err(Arc::new(error));
                 return;
@@ -370,12 +203,14 @@ fn local_text_stream(
                     return;
                 }
             };
-            let message = events::agent_output_message(&message_id, &active_task.id, &request_id, delta);
-            if has_message {
-                yield Ok(events::append_message_event(&active_task.id, message));
-            } else {
-                has_message = true;
-                yield Ok(events::add_message_event(&active_task.id, message));
+            if let chat::OpenAIStreamEvent::Content(delta) = delta {
+                let message = events::agent_output_message(&message_id, &active_task.id, &request_id, delta);
+                if has_message {
+                    yield Ok(events::append_message_event(&active_task.id, message));
+                } else {
+                    has_message = true;
+                    yield Ok(events::add_message_event(&active_task.id, message));
+                }
             }
         }
 
@@ -412,5 +247,13 @@ pub(crate) mod tests_support {
 
     pub(crate) fn parse_sse_delta(line: &str) -> Result<Option<String>, AIApiError> {
         super::parse_sse_delta(line)
+    }
+
+    pub(crate) use super::chat::OpenAIStreamEvent;
+
+    pub(crate) fn parse_sse_event(
+        line: &str,
+    ) -> Result<Option<OpenAIStreamEvent>, AIApiError> {
+        super::chat::parse_sse_event(line)
     }
 }

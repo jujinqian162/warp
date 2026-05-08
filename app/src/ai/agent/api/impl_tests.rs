@@ -113,6 +113,32 @@ fn local_openai_text_ignores_done_delta() {
 }
 
 #[test]
+fn local_openai_parses_content_and_tool_call_chunks() {
+    let content_line = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
+    let tool_line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"run_shell_command","arguments":"{\"command\":\"pwd\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+
+    let content = super::super::local_openai::tests_support::parse_sse_event(content_line)
+        .expect("content line parses");
+    assert_eq!(
+        content,
+        Some(
+            super::super::local_openai::tests_support::OpenAIStreamEvent::Content(
+                "hello".to_string()
+            )
+        )
+    );
+
+    let tool = super::super::local_openai::tests_support::parse_sse_event(tool_line)
+        .expect("tool line parses");
+    assert!(matches!(
+        tool,
+        Some(
+            super::super::local_openai::tests_support::OpenAIStreamEvent::ToolCallDelta(_)
+        )
+    ));
+}
+
+#[test]
 fn local_openai_text_extracts_plain_user_query() {
     let input = vec![user_query_input(" hello ")];
 
