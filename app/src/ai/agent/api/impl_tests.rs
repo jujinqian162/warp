@@ -207,6 +207,52 @@ fn local_openai_history_includes_user_assistant_tool_and_tool_result_messages() 
 }
 
 #[test]
+fn local_openai_built_in_tools_include_expected_function_schemas() {
+    let params = request_params_with_ask_user_question_enabled(false);
+    let tools = super::super::local_openai::tests_support::built_in_openai_tools(&params);
+    let names = tools
+        .iter()
+        .map(|tool| tool.function.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(names.contains("run_shell_command"));
+    assert!(names.contains("read_files"));
+    assert!(names.contains("search_codebase"));
+    assert!(names.contains("grep"));
+    assert!(names.contains("file_glob"));
+    assert!(names.contains("apply_file_diffs"));
+}
+
+#[test]
+fn local_openai_converts_run_shell_command_tool_call_to_warp_tool_call() {
+    let call = super::super::local_openai::tests_support::CompletedOpenAIToolCall {
+        id: "call_1".to_string(),
+        name: "run_shell_command".to_string(),
+        arguments: serde_json::json!({
+            "command": "pwd",
+            "wait_until_completion": true,
+            "is_read_only": true,
+            "uses_pager": false
+        }),
+    };
+
+    let message = super::super::local_openai::tests_support::tool_call_message_from_openai_call(
+        "task-1",
+        "request-1",
+        call,
+    )
+    .expect("tool call converts");
+
+    let Some(api::message::Message::ToolCall(tool_call)) = message.message else {
+        panic!("expected tool call message");
+    };
+    let Some(api::message::tool_call::Tool::RunShellCommand(run)) = tool_call.tool else {
+        panic!("expected run shell command");
+    };
+    assert_eq!(run.command, "pwd");
+}
+
+#[test]
 fn local_openai_text_rejects_non_user_query() {
     let input = vec![crate::ai::agent::AIAgentInput::ResumeConversation {
         context: std::sync::Arc::from([]),

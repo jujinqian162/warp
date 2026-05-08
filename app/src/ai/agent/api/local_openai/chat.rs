@@ -43,16 +43,16 @@ pub(crate) struct OpenAIChatToolCallFunction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct OpenAITool {
-    pub r#type: &'static str,
-    pub function: OpenAIFunctionTool,
+pub(crate) struct OpenAITool {
+    pub(crate) r#type: &'static str,
+    pub(crate) function: OpenAIFunctionTool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct OpenAIFunctionTool {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
+pub(crate) struct OpenAIFunctionTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) parameters: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

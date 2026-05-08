@@ -266,4 +266,20 @@ pub(crate) mod tests_support {
     ) -> Result<super::history::PreparedOpenAIHistory, AIApiError> {
         super::history::build_openai_history(params)
     }
+
+    pub(crate) use super::tools::CompletedOpenAIToolCall;
+
+    pub(crate) fn built_in_openai_tools(
+        params: &RequestParams,
+    ) -> Vec<super::chat::OpenAITool> {
+        super::tools::built_in_openai_tools(params)
+    }
+
+    pub(crate) fn tool_call_message_from_openai_call(
+        task_id: &str,
+        request_id: &str,
+        call: CompletedOpenAIToolCall,
+    ) -> Result<api::Message, AIApiError> {
+        super::tools::tool_call_message_from_openai_call(task_id, request_id, call)
+    }
 }
