@@ -155,32 +155,6 @@ fn local_text_stream(
 
         yield Ok(events::init_event(conversation_id, request_id.clone(), run_id));
 
-        let request = chat::ChatCompletionsRequest {
-            model,
-            messages: prepared_history.messages,
-            stream: true,
-            max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
-            tools: vec![],
-            tool_choice: None,
-        };
-
-        let mut deltas = Box::pin(chat::chat_completion_event_stream(
-            reqwest::Client::new(),
-            base_url,
-            api_key,
-            request,
-        ));
-
-        let first_delta = match deltas.next().await {
-            Some(Ok(chat::OpenAIStreamEvent::Content(delta))) => Some(delta),
-            Some(Ok(_)) => None,
-            Some(Err(error)) => {
-                yield Err(Arc::new(error));
-                return;
-            }
-            None => None,
-        };
-
         if let Some(create_event) = active_task.create_event {
             yield Ok(create_event);
         }
@@ -192,33 +166,71 @@ fn local_text_stream(
             ));
         }
 
-        let mut has_message = false;
-        if let Some(delta) = first_delta {
-            let message = events::agent_output_message(&message_id, &active_task.id, &request_id, delta);
-            has_message = true;
-            yield Ok(events::add_message_event(&active_task.id, message));
-        }
+        let tools = tools::built_in_openai_tools(&params);
+        let request = chat::ChatCompletionsRequest {
+            model,
+            messages: prepared_history.messages,
+            stream: true,
+            max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
+            tool_choice: (!tools.is_empty()).then_some("auto"),
+            tools,
+        };
 
-        while let Some(delta) = deltas.next().await {
-            let delta = match delta {
-                Ok(delta) => delta,
+        let mut events = Box::pin(chat::chat_completion_event_stream(
+            reqwest::Client::new(),
+            base_url,
+            api_key,
+            request,
+        ));
+
+        let mut has_message = false;
+        let mut tool_calls = chat::ToolCallAccumulator::default();
+        while let Some(event) = events.next().await {
+            match event {
+                Ok(chat::OpenAIStreamEvent::Content(delta)) => {
+                    let message = events::agent_output_message(&message_id, &active_task.id, &request_id, delta);
+                    if has_message {
+                        yield Ok(events::append_message_event(&active_task.id, message));
+                    } else {
+                        has_message = true;
+                        yield Ok(events::add_message_event(&active_task.id, message));
+                    }
+                }
+                Ok(chat::OpenAIStreamEvent::ToolCallDelta(delta)) => {
+                    tool_calls.push(delta);
+                }
+                Ok(chat::OpenAIStreamEvent::Done) => break,
                 Err(error) => {
                     yield Err(Arc::new(error));
                     return;
                 }
-            };
-            if let chat::OpenAIStreamEvent::Content(delta) = delta {
-                let message = events::agent_output_message(&message_id, &active_task.id, &request_id, delta);
-                if has_message {
-                    yield Ok(events::append_message_event(&active_task.id, message));
-                } else {
-                    has_message = true;
-                    yield Ok(events::add_message_event(&active_task.id, message));
-                }
             }
         }
 
-        if !has_message {
+        let completed_tool_calls = match tool_calls.finish() {
+            Ok(calls) => calls,
+            Err(error) => {
+                yield Err(Arc::new(error));
+                return;
+            }
+        };
+        let has_tool_calls = !completed_tool_calls.is_empty();
+
+        if has_tool_calls {
+            let mut messages = Vec::new();
+            for call in completed_tool_calls {
+                match tools::tool_call_message_from_openai_call(&active_task.id, &request_id, call) {
+                    Ok(message) => messages.push(message),
+                    Err(error) => {
+                        yield Err(Arc::new(error));
+                        return;
+                    }
+                }
+            }
+            yield Ok(events::add_messages_event(&active_task.id, messages));
+        }
+
+        if !has_message && !has_tool_calls {
             yield Ok(events::add_message_event(
                 &active_task.id,
                 events::agent_output_message(

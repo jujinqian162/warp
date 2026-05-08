@@ -70,6 +70,61 @@ pub(crate) struct OpenAIToolCallDelta {
     pub arguments_delta: String,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct ToolCallAccumulator {
+    calls: std::collections::BTreeMap<usize, PartialToolCall>,
+}
+
+#[derive(Debug, Default)]
+struct PartialToolCall {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+impl ToolCallAccumulator {
+    pub(super) fn push(&mut self, delta: OpenAIToolCallDelta) {
+        let call = self.calls.entry(delta.index).or_default();
+        if delta.id.is_some() {
+            call.id = delta.id;
+        }
+        if delta.function_name.is_some() {
+            call.name = delta.function_name;
+        }
+        call.arguments.push_str(&delta.arguments_delta);
+    }
+
+    pub(super) fn finish(
+        self,
+    ) -> Result<Vec<super::tools::CompletedOpenAIToolCall>, AIApiError> {
+        self.calls
+            .into_iter()
+            .map(|(index, call)| {
+                let id = call.id.unwrap_or_else(|| format!("local_tool_call_{index}"));
+                let name = call.name.ok_or_else(|| {
+                    AIApiError::Other(anyhow!(
+                        "Local OpenAI backend received tool call {index} without a function name"
+                    ))
+                })?;
+                let arguments = if call.arguments.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str(&call.arguments).map_err(|error| {
+                        AIApiError::Other(anyhow!(
+                            "Local OpenAI backend received invalid JSON arguments for tool {name}: {error}"
+                        ))
+                    })?
+                };
+                Ok(super::tools::CompletedOpenAIToolCall {
+                    id,
+                    name,
+                    arguments,
+                })
+            })
+            .collect()
+    }
+}
+
 #[derive(Deserialize)]
 struct ChatCompletionChunk {
     choices: Vec<ChatCompletionChoice>,
