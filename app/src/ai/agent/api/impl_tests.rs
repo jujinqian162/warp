@@ -341,6 +341,15 @@ fn local_openai_action_result_follow_up_sends_tool_role_message_and_streams_answ
         });
 }
 
+#[test]
+fn local_openai_mcp_tools_use_reversible_function_names() {
+    let function_name =
+        super::super::local_openai::tests_support::mcp_tool_function_name("server-123", "read_db");
+
+    assert!(function_name.starts_with("mcp_tool__read_db__"));
+    assert!(function_name.len() <= 64);
+}
+
 async fn local_openai_action_result_follow_up_sends_tool_role_message_and_streams_answer_async(
     server_api: std::sync::Arc<crate::server::server_api::ServerApi>,
 ) {

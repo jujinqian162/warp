@@ -166,7 +166,9 @@ fn local_text_stream(
             ));
         }
 
-        let tools = tools::built_in_openai_tools(&params);
+        let (mcp_tools, mcp_registry) = tools::mcp_openai_tools(&params);
+        let mut tools = tools::built_in_openai_tools(&params);
+        tools.extend(mcp_tools);
         let request = chat::ChatCompletionsRequest {
             model,
             messages: prepared_history.messages,
@@ -219,7 +221,12 @@ fn local_text_stream(
         if has_tool_calls {
             let mut messages = Vec::new();
             for call in completed_tool_calls {
-                match tools::tool_call_message_from_openai_call(&active_task.id, &request_id, call) {
+                match tools::tool_call_message_from_openai_call(
+                    &active_task.id,
+                    &request_id,
+                    call,
+                    &mcp_registry,
+                ) {
                     Ok(message) => messages.push(message),
                     Err(error) => {
                         yield Err(Arc::new(error));
@@ -292,6 +299,15 @@ pub(crate) mod tests_support {
         request_id: &str,
         call: CompletedOpenAIToolCall,
     ) -> Result<api::Message, AIApiError> {
-        super::tools::tool_call_message_from_openai_call(task_id, request_id, call)
+        super::tools::tool_call_message_from_openai_call(
+            task_id,
+            request_id,
+            call,
+            &Default::default(),
+        )
+    }
+
+    pub(crate) fn mcp_tool_function_name(server_id: &str, tool_name: &str) -> String {
+        super::tools::mcp_tool_function_name(server_id, tool_name)
     }
 }

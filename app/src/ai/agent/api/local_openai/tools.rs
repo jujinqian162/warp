@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use anyhow::anyhow;
 use serde_json::{json, Value};
 use warp_multi_agent_api as api;
@@ -13,6 +15,59 @@ pub(crate) struct CompletedOpenAIToolCall {
     pub(crate) arguments: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedMcpToolName {
+    pub server_id: String,
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedMcpResourceName {
+    pub server_id: String,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct McpFunctionRegistry {
+    tool_by_function_name: std::collections::HashMap<String, ParsedMcpToolName>,
+    resource_by_function_name: std::collections::HashMap<String, ParsedMcpResourceName>,
+}
+
+fn encode_name_part(value: &str) -> String {
+    let encoded: String = value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect();
+    let trimmed = encoded.trim_matches('_');
+    if trimmed.is_empty() {
+        "item".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn short_hash(value: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn bounded_function_name(prefix: &str, label: &str, unique_key: &str) -> String {
+    let hash = short_hash(unique_key);
+    let max_label_len = 64usize.saturating_sub(prefix.len() + hash.len() + 4);
+    let mut label = encode_name_part(label);
+    label.truncate(max_label_len.max(1));
+    format!("{prefix}__{label}__{hash}")
+}
+
+pub(super) fn mcp_tool_function_name(server_id: &str, tool_name: &str) -> String {
+    bounded_function_name("mcp_tool", tool_name, &format!("{server_id}\0{tool_name}"))
+}
+
+pub(super) fn mcp_resource_function_name(server_id: &str, uri: &str) -> String {
+    bounded_function_name("mcp_resource", uri, &format!("{server_id}\0{uri}"))
+}
+
 fn function_tool(name: &str, description: &str, parameters: Value) -> OpenAITool {
     OpenAITool {
         r#type: "function",
@@ -22,6 +77,56 @@ fn function_tool(name: &str, description: &str, parameters: Value) -> OpenAITool
             parameters,
         },
     }
+}
+
+pub(super) fn mcp_openai_tools(params: &RequestParams) -> (Vec<OpenAITool>, McpFunctionRegistry) {
+    let mut tools = Vec::new();
+    let mut registry = McpFunctionRegistry::default();
+    let Some(context) = params.mcp_context.as_ref() else {
+        return (tools, registry);
+    };
+
+    for server in &context.servers {
+        for tool in &server.tools {
+            let function_name = mcp_tool_function_name(&server.id, &tool.name);
+            registry.tool_by_function_name.insert(
+                function_name.clone(),
+                ParsedMcpToolName {
+                    server_id: server.id.clone(),
+                    tool_name: tool.name.to_string(),
+                },
+            );
+            let parameters = Value::Object(tool.input_schema.as_ref().clone());
+            tools.push(function_tool(
+                &function_name,
+                &format!("Call MCP tool {} from server {}", tool.name, server.name),
+                parameters,
+            ));
+        }
+
+        for resource in &server.resources {
+            let uri = resource.raw.uri.to_string();
+            let function_name = mcp_resource_function_name(&server.id, &uri);
+            registry.resource_by_function_name.insert(
+                function_name.clone(),
+                ParsedMcpResourceName {
+                    server_id: server.id.clone(),
+                    uri: uri.clone(),
+                },
+            );
+            tools.push(function_tool(
+                &function_name,
+                &format!("Read MCP resource {} from server {}", uri, server.name),
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            ));
+        }
+    }
+
+    (tools, registry)
 }
 
 pub(super) fn built_in_openai_tools(params: &RequestParams) -> Vec<OpenAITool> {
@@ -167,8 +272,25 @@ pub(super) fn tool_call_message_from_openai_call(
     task_id: &str,
     request_id: &str,
     call: CompletedOpenAIToolCall,
+    mcp_registry: &McpFunctionRegistry,
 ) -> Result<api::Message, AIApiError> {
-    let tool = built_in_warp_tool_from_openai_call(&call)?;
+    let tool = if let Some(parsed) = mcp_registry.tool_by_function_name.get(&call.name) {
+        api::message::tool_call::Tool::CallMcpTool(api::message::tool_call::CallMcpTool {
+            name: parsed.tool_name.clone(),
+            server_id: parsed.server_id.clone(),
+            args: Some(serde_json_object_to_prost_struct(call.arguments)?),
+        })
+    } else if let Some(parsed) = mcp_registry.resource_by_function_name.get(&call.name) {
+        api::message::tool_call::Tool::ReadMcpResource(
+            api::message::tool_call::ReadMcpResource {
+                uri: parsed.uri.clone(),
+                server_id: parsed.server_id.clone(),
+            },
+        )
+    } else {
+        built_in_warp_tool_from_openai_call(&call)?
+    };
+
     Ok(api::Message {
         id: uuid::Uuid::new_v4().to_string(),
         task_id: task_id.to_string(),
@@ -179,6 +301,42 @@ pub(super) fn tool_call_message_from_openai_call(
         })),
         ..Default::default()
     })
+}
+
+fn serde_json_object_to_prost_struct(value: Value) -> Result<prost_types::Struct, AIApiError> {
+    let Value::Object(object) = value else {
+        return Err(AIApiError::Other(anyhow!(
+            "Local OpenAI backend received MCP tool arguments that were not a JSON object"
+        )));
+    };
+    Ok(prost_types::Struct {
+        fields: object
+            .into_iter()
+            .map(|(key, value)| (key, serde_json_to_prost_value(value)))
+            .collect(),
+    })
+}
+
+fn serde_json_to_prost_value(value: Value) -> prost_types::Value {
+    use prost_types::value::Kind;
+
+    prost_types::Value {
+        kind: Some(match value {
+            Value::Null => Kind::NullValue(0),
+            Value::Bool(value) => Kind::BoolValue(value),
+            Value::Number(value) => Kind::NumberValue(value.as_f64().unwrap_or_default()),
+            Value::String(value) => Kind::StringValue(value),
+            Value::Array(values) => Kind::ListValue(prost_types::ListValue {
+                values: values.into_iter().map(serde_json_to_prost_value).collect(),
+            }),
+            Value::Object(values) => Kind::StructValue(prost_types::Struct {
+                fields: values
+                    .into_iter()
+                    .map(|(key, value)| (key, serde_json_to_prost_value(value)))
+                    .collect(),
+            }),
+        }),
+    }
 }
 
 fn built_in_warp_tool_from_openai_call(
@@ -393,6 +551,12 @@ pub(super) fn openai_name_for_warp_tool_call(
         api::message::tool_call::Tool::Grep(_) => Ok("grep".to_string()),
         api::message::tool_call::Tool::FileGlobV2(_) => Ok("file_glob".to_string()),
         api::message::tool_call::Tool::ApplyFileDiffs(_) => Ok("apply_file_diffs".to_string()),
+        api::message::tool_call::Tool::ReadMcpResource(resource) => {
+            Ok(mcp_resource_function_name(&resource.server_id, &resource.uri))
+        }
+        api::message::tool_call::Tool::CallMcpTool(tool) => {
+            Ok(mcp_tool_function_name(&tool.server_id, &tool.name))
+        }
         _ => Err(AIApiError::Other(anyhow!(
             "Local OpenAI backend cannot replay unsupported Warp tool call"
         ))),
@@ -449,9 +613,56 @@ pub(super) fn openai_arguments_for_warp_tool_call(
                 "replace": diff.replace.clone(),
             })).collect::<Vec<_>>()
         }),
+        api::message::tool_call::Tool::ReadMcpResource(resource) => json!({
+            "uri": resource.uri.clone(),
+            "server_id": resource.server_id.clone()
+        }),
+        api::message::tool_call::Tool::CallMcpTool(tool) => json!({
+            "name": tool.name.clone(),
+            "server_id": tool.server_id.clone(),
+            "args": tool.args.clone().map(|args| prost_to_serde_json(prost_types::Value {
+                kind: Some(prost_types::value::Kind::StructValue(args)),
+            })).transpose().map_err(|error| {
+                AIApiError::Other(anyhow!(
+                    "Local OpenAI backend cannot serialize MCP tool args: {error}"
+                ))
+            })?
+        }),
         _ => Err(AIApiError::Other(anyhow!(
             "Local OpenAI backend cannot serialize unsupported Warp tool call"
         )))?,
     };
     Ok(arguments.to_string())
+}
+
+fn prost_to_serde_json(value: prost_types::Value) -> Result<Value, String> {
+    use prost_types::value::Kind::*;
+
+    let Some(kind) = value.kind else {
+        return Err("google.protobuf.Value kind was None".to_string());
+    };
+
+    Ok(match kind {
+        NullValue(_) => Value::Null,
+        BoolValue(value) => Value::Bool(value),
+        NumberValue(value) => Value::Number(
+            serde_json::Number::from_f64(value)
+                .ok_or_else(|| format!("float {value} is not valid JSON number"))?,
+        ),
+        StringValue(value) => Value::String(value),
+        ListValue(value) => Value::Array(
+            value
+                .values
+                .into_iter()
+                .map(prost_to_serde_json)
+                .collect::<Result<Vec<_>, String>>()?,
+        ),
+        StructValue(value) => Value::Object(
+            value
+                .fields
+                .into_iter()
+                .map(|(key, value)| prost_to_serde_json(value).map(|value| (key, value)))
+                .collect::<Result<serde_json::Map<_, _>, String>>()?,
+        ),
+    })
 }
