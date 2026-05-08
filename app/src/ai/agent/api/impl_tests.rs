@@ -148,6 +148,65 @@ fn local_openai_text_extracts_plain_user_query() {
 }
 
 #[test]
+fn local_openai_history_includes_user_assistant_tool_and_tool_result_messages() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.tasks = vec![api::Task {
+        id: "task-1".to_string(),
+        messages: vec![
+            api::Message {
+                id: "user-msg".to_string(),
+                task_id: "task-1".to_string(),
+                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                    query: "where am I?".to_string(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            api::Message {
+                id: "tool-call-msg".to_string(),
+                task_id: "task-1".to_string(),
+                message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                    tool_call_id: "call_1".to_string(),
+                    tool: Some(api::message::tool_call::Tool::RunShellCommand(
+                        api::message::tool_call::RunShellCommand {
+                            command: "pwd".to_string(),
+                            ..Default::default()
+                        },
+                    )),
+                })),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }];
+    params.input = vec![crate::ai::agent::AIAgentInput::ActionResult {
+        result: crate::ai::agent::AIAgentActionResult {
+            id: "call_1".to_string().into(),
+            task_id: crate::ai::agent::task::TaskId::new("task-1".to_string()),
+            result: crate::AIAgentActionResultType::RequestCommandOutput(
+                crate::ai::agent::RequestCommandOutputResult::Completed {
+                    block_id: "block-1".to_string().into(),
+                    command: "pwd".to_string(),
+                    output: "/tmp/project".to_string(),
+                    exit_code: warp_core::command::ExitCode::from(0),
+                },
+            ),
+        },
+        context: std::sync::Arc::from([]),
+    }];
+
+    let prepared = super::super::local_openai::tests_support::build_openai_history(&params)
+        .expect("history should build");
+
+    assert_eq!(prepared.messages[0].role, "user");
+    assert_eq!(prepared.messages[1].role, "assistant");
+    assert!(prepared.messages[1].tool_calls.is_some());
+    assert_eq!(prepared.messages[2].role, "tool");
+    assert_eq!(prepared.messages[2].tool_call_id.as_deref(), Some("call_1"));
+    assert_eq!(prepared.messages_to_persist.len(), 1);
+}
+
+#[test]
 fn local_openai_text_rejects_non_user_query() {
     let input = vec![crate::ai::agent::AIAgentInput::ResumeConversation {
         context: std::sync::Arc::from([]),

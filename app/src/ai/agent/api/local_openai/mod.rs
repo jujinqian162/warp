@@ -9,6 +9,8 @@ use warp_multi_agent_api as api;
 
 mod chat;
 mod events;
+mod history;
+mod tools;
 
 use crate::{
     ai::agent::{
@@ -137,14 +139,14 @@ fn local_text_stream(
             }
         };
         let model = local_model(settings.model, params.model.as_str());
-        let prompt = match extract_user_query(&params.input) {
+        let prepared_history = match history::build_openai_history(&params) {
             Ok(value) => value,
             Err(error) => {
                 yield Err(Arc::new(error));
                 return;
             }
         };
-        let active_task = active_task(&params, &prompt);
+        let active_task = active_task(&params, &prepared_history.task_description_fallback());
 
         let request_id = Uuid::new_v4().to_string();
         let conversation_id = String::new();
@@ -155,12 +157,7 @@ fn local_text_stream(
 
         let request = chat::ChatCompletionsRequest {
             model,
-            messages: vec![chat::OpenAIChatMessage {
-                role: "user",
-                content: Some(prompt),
-                tool_call_id: None,
-                tool_calls: None,
-            }],
+            messages: prepared_history.messages,
             stream: true,
             max_tokens: DEFAULT_LOCAL_MAX_TOKENS,
             tools: vec![],
@@ -186,6 +183,13 @@ fn local_text_stream(
 
         if let Some(create_event) = active_task.create_event {
             yield Ok(create_event);
+        }
+
+        if !prepared_history.messages_to_persist.is_empty() {
+            yield Ok(events::add_messages_event(
+                &active_task.id,
+                prepared_history.messages_to_persist,
+            ));
         }
 
         let mut has_message = false;
@@ -255,5 +259,11 @@ pub(crate) mod tests_support {
         line: &str,
     ) -> Result<Option<OpenAIStreamEvent>, AIApiError> {
         super::chat::parse_sse_event(line)
+    }
+
+    pub(crate) fn build_openai_history(
+        params: &RequestParams,
+    ) -> Result<super::history::PreparedOpenAIHistory, AIApiError> {
+        super::history::build_openai_history(params)
     }
 }

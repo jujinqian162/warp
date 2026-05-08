@@ -19,27 +19,27 @@ pub(super) struct ChatCompletionsRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct OpenAIChatMessage {
-    pub role: &'static str,
+pub(crate) struct OpenAIChatMessage {
+    pub(crate) role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub(crate) content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+    pub(crate) tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<OpenAIChatToolCall>>,
+    pub(crate) tool_calls: Option<Vec<OpenAIChatToolCall>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct OpenAIChatToolCall {
-    pub id: String,
-    pub r#type: &'static str,
-    pub function: OpenAIChatToolCallFunction,
+pub(crate) struct OpenAIChatToolCall {
+    pub(crate) id: String,
+    pub(crate) r#type: &'static str,
+    pub(crate) function: OpenAIChatToolCallFunction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct OpenAIChatToolCallFunction {
-    pub name: String,
-    pub arguments: String,
+pub(crate) struct OpenAIChatToolCallFunction {
+    pub(crate) name: String,
+    pub(crate) arguments: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
