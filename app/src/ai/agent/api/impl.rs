@@ -21,8 +21,8 @@ pub async fn generate_multi_agent_output(
         MultiAgentBackend::WarpServer => {
             generate_warp_server_multi_agent_output(server_api, params, cancellation_rx).await
         }
-        MultiAgentBackend::LocalOpenAIText(settings) => {
-            super::local_openai_text::generate_text_output(settings, params, cancellation_rx).await
+        MultiAgentBackend::LocalOpenAI(settings) => {
+            super::local_openai::generate_output(settings, params, cancellation_rx).await
         }
     }
 }
@@ -168,7 +168,7 @@ async fn generate_warp_server_multi_agent_output(
     }
 }
 
-fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
+pub(super) fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     let mut supported_tools = vec![
         api::ToolType::Grep,
         api::ToolType::FileGlob,

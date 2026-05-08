@@ -6489,7 +6489,7 @@ impl ApiKeysWidget {
             .with_child(
                 Container::new(
                     render_ai_setting_description(
-                        "Use your own API keys from model providers. OpenAI API Key, OpenAI Base URL, and OpenAI Model are also used by the local OpenAI-compatible text backend when it is enabled. Provider keys are stored locally and never synced to the cloud.",
+                        "Use your own API keys from model providers. OpenAI API Key, OpenAI Base URL, and OpenAI Model are also used by the local OpenAI-compatible backend when it is enabled. Provider keys are stored locally and never synced to the cloud.",
                         is_enabled,
                         app,
                     ))
@@ -6545,7 +6545,7 @@ impl ApiKeysWidget {
             let appearance = Appearance::as_ref(app);
             build_toggle_element(
                 Text::new_inline(
-                    "Use local OpenAI-compatible text backend",
+                    "Use local OpenAI-compatible backend",
                     appearance.ui_font_family(),
                     CONTENT_FONT_SIZE,
                 )

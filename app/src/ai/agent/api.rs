@@ -2,7 +2,7 @@ pub(crate) mod convert_conversation;
 mod convert_from;
 mod convert_to;
 mod r#impl;
-mod local_openai_text;
+mod local_openai;
 
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
@@ -97,11 +97,11 @@ impl TryFrom<ServerConversationToken>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiAgentBackend {
     WarpServer,
-    LocalOpenAIText(LocalOpenAITextBackendSettings),
+    LocalOpenAI(LocalOpenAIBackendSettings),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalOpenAITextBackendSettings {
+pub struct LocalOpenAIBackendSettings {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
@@ -252,7 +252,7 @@ impl RequestParams {
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
         let backend = if api_key_manager.is_local_openai_text_backend_enabled() {
-            MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+            MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
                 api_key: api_key_manager.keys().openai.clone(),
                 base_url: api_key_manager.openai_base_url().map(ToOwned::to_owned),
                 model: api_key_manager.openai_model().map(ToOwned::to_owned),

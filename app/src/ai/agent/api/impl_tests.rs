@@ -1,4 +1,4 @@
-use crate::ai::agent::api::{LocalOpenAITextBackendSettings, MultiAgentBackend, RequestParams};
+use crate::ai::agent::api::{LocalOpenAIBackendSettings, MultiAgentBackend, RequestParams};
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use warp_core::features::FeatureFlag;
@@ -98,7 +98,7 @@ fn user_query_input(query: &str) -> crate::ai::agent::AIAgentInput {
 fn local_openai_text_parses_chat_completion_delta() {
     let line = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
 
-    let delta = super::super::local_openai_text::tests_support::parse_sse_delta(line)
+    let delta = super::super::local_openai::tests_support::parse_sse_delta(line)
         .expect("valid SSE line");
 
     assert_eq!(delta.as_deref(), Some("hello"));
@@ -107,7 +107,7 @@ fn local_openai_text_parses_chat_completion_delta() {
 #[test]
 fn local_openai_text_ignores_done_delta() {
     let delta =
-        super::super::local_openai_text::tests_support::parse_sse_delta("data: [DONE]").unwrap();
+        super::super::local_openai::tests_support::parse_sse_delta("data: [DONE]").unwrap();
 
     assert_eq!(delta, None);
 }
@@ -116,7 +116,7 @@ fn local_openai_text_ignores_done_delta() {
 fn local_openai_text_extracts_plain_user_query() {
     let input = vec![user_query_input(" hello ")];
 
-    let query = super::super::local_openai_text::tests_support::extract_user_query(&input).unwrap();
+    let query = super::super::local_openai::tests_support::extract_user_query(&input).unwrap();
 
     assert_eq!(query, "hello");
 }
@@ -128,7 +128,7 @@ fn local_openai_text_rejects_non_user_query() {
     }];
 
     let error =
-        super::super::local_openai_text::tests_support::extract_user_query(&input).unwrap_err();
+        super::super::local_openai::tests_support::extract_user_query(&input).unwrap_err();
 
     assert!(format!("{error:?}").contains("only supports plain user queries"));
 }
@@ -136,7 +136,7 @@ fn local_openai_text_rejects_non_user_query() {
 #[test]
 fn local_openai_text_uses_default_model_constant() {
     assert_eq!(
-        super::super::local_openai_text::tests_support::DEFAULT_LOCAL_MODEL,
+        super::super::local_openai::tests_support::DEFAULT_LOCAL_MODEL,
         "gpt-4o-mini"
     );
 }
@@ -149,7 +149,7 @@ fn local_openai_text_extracts_active_task_id() {
         ..Default::default()
     }];
 
-    let task_id = super::super::local_openai_text::tests_support::active_task_id(&params).unwrap();
+    let task_id = super::super::local_openai::tests_support::active_task_id(&params).unwrap();
 
     assert_eq!(task_id, "task-1");
 }
@@ -250,7 +250,7 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
         description: "test".to_string(),
         ..Default::default()
     }];
-    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
         api_key: Some("sk-local".to_string()),
         base_url: Some(format!("{}/v1", server.url())),
         model: Some("local-model".to_string()),
@@ -300,7 +300,7 @@ async fn local_openai_text_posts_to_configured_base_url_and_emits_text_events_as
             api::client_action::Action::AppendToMessageContent(append) => {
                 assert_eq!(
                     append.mask.unwrap().paths,
-                    vec![super::super::local_openai_text::tests_support::AGENT_OUTPUT_FIELD_MASK]
+                    vec![super::super::local_openai::tests_support::AGENT_OUTPUT_FIELD_MASK]
                 );
                 let message = append.message.unwrap();
                 let Some(api::message::Message::AgentOutput(output)) = message.message else {
@@ -365,7 +365,7 @@ async fn local_openai_text_emits_first_delta_before_sse_response_finishes_async(
         description: "test".to_string(),
         ..Default::default()
     }];
-    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
         api_key: Some("sk-local".to_string()),
         base_url: Some(base_url),
         model: Some("local-model".to_string()),
@@ -437,7 +437,7 @@ async fn local_openai_text_requests_default_completion_token_budget_async(
         description: "test".to_string(),
         ..Default::default()
     }];
-    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
         api_key: Some("sk-local".to_string()),
         base_url: Some(format!("{}/v1", server.url())),
         model: Some("local-model".to_string()),
@@ -498,7 +498,7 @@ async fn local_openai_text_uses_selected_model_when_local_model_setting_is_empty
         description: "test".to_string(),
         ..Default::default()
     }];
-    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
         api_key: Some("sk-local".to_string()),
         base_url: Some(format!("{}/v1", server.url())),
         model: None,
@@ -553,7 +553,7 @@ async fn local_openai_text_creates_task_when_request_has_no_active_tasks_async(
 
     let mut params = request_params_with_ask_user_question_enabled(false);
     params.input = vec![user_query_input("hello")];
-    params.backend = MultiAgentBackend::LocalOpenAIText(LocalOpenAITextBackendSettings {
+    params.backend = MultiAgentBackend::LocalOpenAI(LocalOpenAIBackendSettings {
         api_key: Some("sk-local".to_string()),
         base_url: Some(format!("{}/v1", server.url())),
         model: Some("local-model".to_string()),
